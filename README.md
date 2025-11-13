@@ -354,12 +354,7 @@ Special thanks to the researchers and contributors who have made this work possi
 
 This project builds upon their foundational work in surveillance detection and privacy protection.
 
-## Support and Updates
 
-### Documentation
-- **Technical Support**: Available through colonelpanic.tech
-- **Firmware Updates**: Regular updates with improved detection patterns
-- **Community**: Join our community for tips and modifications
 
 ### Purchase Information
 **Oui-Spy devices are available exclusively at [colonelpanic.tech](https://colonelpanic.tech)**
