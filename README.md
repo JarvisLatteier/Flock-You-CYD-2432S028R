@@ -1,6 +1,7 @@
 # Flock You: Flock Safety Detection System
-Adapted to work on the CYD-2432S028R
 <img src="flock.png" alt="Flock You" width="300px">
+
+Adapted to work on the CYD-2432S028R
 
 **Professional surveillance camera detection for the Oui-Spy device available at [colonelpanic.tech](https://colonelpanic.tech)**
 
