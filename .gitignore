@@ -1,6 +1,37 @@
-
+# PlatformIO
 .pio/
+.pioenvs/
+.piolibdeps/
 
+# IDE
 .vscode/
+.idea/
+*.swp
+*.swo
+*~
 
+# macOS
 .DS_Store
+._*
+
+# Python (api/)
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+*.egg-info/
+
+# Logs
+*.log
+logs/
+
+# Build artifacts
+*.elf
+*.bin
+*.hex
+*.map
+
+# Temporary files
+*.tmp
+*.bak
