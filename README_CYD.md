@@ -258,3 +258,4 @@ This tool is for educational and research purposes only. Users must comply with 
 - Original [Flock-You](https://github.com/fuzzzy-kyle/flock-you-cyd) project
 - Detection patterns from [DeFlock](https://deflock.me) crowdsourced database
 - Hardware analysis and adaptation for ESP32-2432S028R
+- Inspired by the work of fuzzzy-kyle, [Flock You - CYD](https://github.com/fuzzzy-kyle/flock-you-cyd)
