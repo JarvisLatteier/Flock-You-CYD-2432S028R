@@ -14,7 +14,7 @@ This is a purpose-built fork for the **ESP32-2432S028R** "Cheap Yellow Display" 
 - 2.8" display (NOT 3.5" or 4.3")
 - 320x240 resolution
 - ILI9341 display controller
-- Red PCB with USB connector on the short edge
+- Yellow PCB with USB connector on the short edge
 
 ## Hardware Specifications
 
