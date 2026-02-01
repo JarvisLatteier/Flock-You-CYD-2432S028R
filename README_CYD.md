@@ -1,173 +1,260 @@
-# Flock You - CYD (Cheap Yellow Display) Edition
+# Flock You - ESP32-2432S028R Edition
 
-This version of Flock You has been adapted to work with the ESP32-2432S035C "Cheap Yellow Display" - a 3.5" touchscreen ESP32 development board.
+This fork is specifically adapted for the **ESP32-2432S028R** "Cheap Yellow Display" - a 2.8" touchscreen ESP32 development board. It provides a complete touchscreen interface with RGB LED alerts, SD card logging, and touch calibration persistence.
 
-## Hardware Requirements
+## Hardware Specifications
 
-### CYD Board Specifications
-- **Board**: ESP32-2432S035C (3.5" version)
-- **Display**: 480x320 ILI9488 TFT LCD
-- **Touch**: XPT2046 resistive touchscreen
-- **Processor**: ESP32-WROOM-32
-- **Flash**: 4MB
-- **RAM**: 520KB SRAM
+### ESP32-2432S028R Board
+| Component | Specification |
+|-----------|---------------|
+| **MCU** | ESP32-WROOM-32 |
+| **Display** | 2.8" ILI9341 TFT LCD, 320x240 pixels |
+| **Touch** | XPT2046 resistive touchscreen |
+| **Flash** | 4MB |
+| **USB** | CH340C USB-to-Serial |
+| **Power** | 5V via USB-C or Micro-USB |
 
-### Optional Hardware
-- **External Buzzer**: Connect to GPIO22 for audio alerts (optional)
-- **MicroSD Card**: For data logging (optional)
+### Key Hardware Notes
+
+**Display SPI Bus (VSPI):**
+- SCK: GPIO 14
+- MOSI: GPIO 13
+- MISO: GPIO 12
+- CS: GPIO 15
+- DC: GPIO 2
+- RST: GPIO 4
+- Backlight: GPIO 27 + GPIO 21 (dual backlight, active HIGH)
+
+**Touch Controller (Separate HSPI Bus):**
+The XPT2046 touch controller is on a **separate HSPI bus** - this is critical and differs from many other CYD boards:
+- CS: GPIO 33
+- CLK: GPIO 25
+- MOSI: GPIO 32
+- MISO: GPIO 39
+- IRQ: GPIO 36 (input-only, no internal pullup)
+
+**RGB LED (Active LOW):**
+- Red: GPIO 4
+- Green: GPIO 16
+- Blue: GPIO 17
+- Note: HIGH = LED off, LOW = LED on
+
+**SD Card:**
+- CS: GPIO 5
+- Shares VSPI bus with display
+
+**Available for Extensions:**
+- GPIO 22: Buzzer output (active HIGH)
 
 ## Features
 
-### Visual Interface
-- **Main Dashboard**: Real-time detection display with statistics
-- **Detection List**: Scrollable list of all detected devices
-- **Statistics Page**: Visual charts and detection analytics
-- **Settings Page**: Configure scanning parameters
-- **About Page**: System information
+### Touchscreen Interface
+- **5-page navigation**: HOME, LIST, STAT, CONF, CAL
+- **Main dashboard**: Real-time detection stats, latest detection panel, LED status key
+- **Detection list**: Scrollable list with color-coded threat indicators
+- **Statistics page**: Detection counts, percentages, distribution bars, CLEAR button
+- **Settings page**: Display brightness, RGB LED brightness, auto-brightness toggle, LED alert toggle, SD card status
+- **Calibration page**: 4-point guided touch calibration with validation
 
-### Touch Controls
-- Navigation buttons at bottom of screen
-- Touch-enabled settings adjustments
-- Clear detection history with one tap
-- Page switching via touch zones
+### RGB LED Alert System
+The RGB LED provides visual status at a glance:
 
-### Detection Display
-- Color-coded alerts (Red for Flock, Yellow for suspicious, Green for safe)
-- Signal strength indicators
-- Real-time channel hopping display
-- Detection counters and statistics
-- Progress bars for detection distribution
+| State | Color | Behavior |
+|-------|-------|----------|
+| Scanning | Green (50%) | Solid - system is actively scanning |
+| Detection | Red | Flashing - speed based on signal strength |
+| Alert | Orange | Solid - recent detection, signal lost |
+
+Flash rate scales with RSSI: stronger signals flash faster (50ms interval) while weak signals flash slower (400ms interval).
+
+### Touch Calibration System
+First boot triggers a guided 4-point calibration:
+1. Tap targets at each corner (TL → TR → BL → BR)
+2. System validates against known good ranges (200-4000, span >2000)
+3. Invalid calibrations are rejected with restart prompt
+4. Valid calibrations save to `/touch_cal.txt` on SD card
+5. Subsequent boots load calibration automatically
+
+Manual recalibration available via CAL button in footer.
+
+### SD Card Features
+- **Detection logging**: All detections logged to `/flockyou_detections.csv`
+- **Calibration persistence**: Touch calibration saved to `/touch_cal.txt`
+- **Format**: CSV with timestamp, SSID, MAC, RSSI, type
 
 ## Installation
 
 ### Prerequisites
-1. Install PlatformIO:
-```bash
-# Install via pip
-pip install platformio
+- [PlatformIO](https://platformio.org/) CLI or IDE
+- USB cable (Micro-USB or USB-C depending on board variant)
+- **macOS M1/M2/M3 Note**: Upload speed must be 115200 baud (921600 fails on Apple Silicon)
 
-# Or install PlatformIO IDE for VSCode
-# https://platformio.org/install/ide?install=vscode
+### Build & Flash
+
+```bash
+# Clone the repository
+git clone https://github.com/JarvisLatteier/Flock-You-CYD-2432S028R.git
+cd Flock-You-CYD-2432S028R
+
+# Build firmware
+pio run -e esp32_cyd_28
+
+# Flash to device
+pio run -e esp32_cyd_28 -t upload
+
+# Monitor serial output (115200 baud)
+pio device monitor -e esp32_cyd_28
 ```
 
-2. Install USB drivers for ESP32 (if needed):
-- Windows: CH340 driver
-- Linux/Mac: Usually works out of the box
+### Alternative: Headless Build
+If you don't need the display interface (e.g., using the web dashboard only):
 
-### Compiling and Uploading
-
-1. Clone the repository:
 ```bash
-git clone [repository-url]
-cd flock-you-cyd
+pio run -e esp32_cyd_28_headless -t upload
 ```
 
-2. Build for CYD:
-```bash
-# Build the firmware
-platformio run -e esp32_cyd_35
+This excludes all display code but retains RGB LED alerts and serial JSON output.
 
-# Upload to device (connect via USB first)
-platformio run -e esp32_cyd_35 --target upload
+## Build Environments
 
-# Monitor serial output
-platformio device monitor
-```
-
-3. Alternative method using Arduino IDE:
-- Install ESP32 board support
-- Install required libraries: TFT_eSPI, XPT2046_Touchscreen, NimBLE-Arduino, ArduinoJson
-- Configure TFT_eSPI for ILI9488 driver
-- Compile and upload
+| Environment | Description |
+|-------------|-------------|
+| `esp32_cyd_28` | Full build with touchscreen UI |
+| `esp32_cyd_28_headless` | No display, RGB LED + serial only |
 
 ## Usage
 
-### Initial Setup
-1. Power on the device via USB-C
-2. The display will show a splash screen
-3. System will automatically start scanning
+### First Boot
+1. Insert SD card (optional but recommended for calibration persistence)
+2. Power on via USB
+3. Complete 4-point touch calibration if prompted
+4. System begins scanning automatically
 
 ### Navigation
-- **MAIN**: Overview dashboard with latest detections
-- **LIST**: Scrollable list of all detections
-- **STATS**: Detection statistics and graphs
-- **SET**: Configuration options
-- **CLR**: Clear all detection history
+Touch the footer buttons to navigate:
+- **HOME**: Main dashboard with stats and latest detection
+- **LIST**: Scrollable detection history
+- **STAT**: Statistics and CLEAR button
+- **CONF**: Brightness controls, LED toggle, SD status
+- **CAL**: Recalibrate touchscreen
+
+### Settings
+- **Display brightness**: +/- buttons (10% increments, 10-100%)
+- **Auto brightness**: Toggle to use LDR sensor (GPIO 34)
+- **RGB LED brightness**: +/- buttons for alert LED intensity
+- **LED alerts**: Toggle RGB LED on/off
 
 ### Understanding Detections
 
-#### Color Codes
-- **Red**: Confirmed Flock Safety device
-- **Yellow**: Suspicious surveillance device
-- **Cyan**: BLE advertisement
-- **Green**: Strong signal
-- **White**: General information
+**Color coding in list view:**
+- Red left bar: Flock/Penguin/Pigvision threat
+- Purple left bar: BLE device
+- Blue left bar: WiFi device
 
-#### Detection Information
-- **SSID**: Network name (for WiFi devices)
-- **MAC**: Hardware address
-- **RSSI**: Signal strength in dBm
-- **Type**: WiFi or BLE
-- **Channel**: Current WiFi channel being scanned
+**Signal strength bars:**
+- 4 bars: Excellent (> -50 dBm)
+- 3 bars: Good (-50 to -60 dBm)
+- 2 bars: Fair (-60 to -70 dBm)
+- 1 bar: Weak (-70 to -80 dBm)
+- 0 bars: Very weak (< -80 dBm)
 
-### Configuration Options
-- **Audio Alerts**: Enable/disable buzzer (if connected)
-- **Brightness**: Adjust display brightness
-- **Scan Speed**: Fast/Medium/Slow scanning
-- **Auto Clear**: Automatically clear old detections
-- **Rotation**: Change display orientation
+## Pin Reference
+
+### Complete GPIO Map
+
+| GPIO | Function | Notes |
+|------|----------|-------|
+| 2 | TFT DC | Data/Command |
+| 4 | TFT RST / RGB Red | Directly driving red LED  |
+| 5 | SD Card CS | |
+| 12 | TFT MISO | VSPI |
+| 13 | TFT MOSI | VSPI |
+| 14 | TFT SCK | VSPI |
+| 15 | TFT CS | |
+| 16 | RGB Green | Active LOW |
+| 17 | RGB Blue | Active LOW |
+| 21 | TFT Backlight 2 | PWM, paired with GPIO 27 |
+| 22 | Buzzer | Optional, active HIGH |
+| 25 | Touch CLK | HSPI |
+| 27 | TFT Backlight 1 | PWM |
+| 32 | Touch MOSI | HSPI |
+| 33 | Touch CS | |
+| 34 | LDR | Analog input for auto-brightness |
+| 36 | Touch IRQ | Input-only, no pullup |
+| 39 | Touch MISO | Input-only |
+
+### Why Separate Touch SPI?
+The ESP32-2432S028R uses a **separate HSPI bus for touch** (unlike some CYD variants that share VSPI). This is because:
+- GPIO 36/39 are input-only pins used for touch MISO/IRQ
+- Sharing would require complex CS toggling and cause display artifacts
+- Separate buses allow simultaneous display updates and touch reads
 
 ## Troubleshooting
 
 ### Display Issues
-- If display is blank: Check USB power supply (needs 5V, 500mA minimum)
-- If colors are inverted: Change ILI9488_DRIVER to ST7796_DRIVER in platformio.ini
-- If touch is not working: Recalibrate touch in display_handler.h
+| Problem | Solution |
+|---------|----------|
+| Blank screen | Check USB power (needs 500mA+) |
+| Wrong colors | Verify `TFT_RGB_ORDER=TFT_BGR` in build flags |
+| Dim display | Both backlight pins (27, 21) must be driven |
 
-### Compilation Errors
-- Missing libraries: Run `platformio lib install` to get dependencies
-- Board not found: Install ESP32 platform `platformio platform install espressif32`
-- Upload fails: Check USB connection and correct port selection
+### Touch Issues
+| Problem | Solution |
+|---------|----------|
+| Touch not responding | Check HSPI wiring (separate from display) |
+| Touch inverted/offset | Run calibration (CAL button) |
+| Calibration fails | Tap precisely on crosshair centers |
 
-### Detection Issues
-- No detections: Ensure WiFi and BLE are not disabled
-- False positives: Adjust detection patterns in main.cpp
-- Missing detections: Increase scan duration or decrease channel hop interval
+### Upload Issues
+| Problem | Solution |
+|---------|----------|
+| Upload fails on Mac | Ensure `upload_speed = 115200` |
+| Port not found | Install CH340 driver if needed |
+| Timeout errors | Hold BOOT button while uploading |
 
-## Pin Connections
+### SD Card Issues
+| Problem | Solution |
+|---------|----------|
+| SD not detected | Format as FAT32, check GPIO 5 CS |
+| Calibration not saving | Ensure SD card is writable |
 
-### Display Pins (Pre-connected on CYD)
-- MOSI: GPIO 23
-- MISO: GPIO 19
-- SCLK: GPIO 18
-- CS: GPIO 15
-- DC: GPIO 2
-- RST: GPIO 4
-- BL: GPIO 21
+## Web Dashboard
 
-### Touch Pins (Pre-connected on CYD)
-- T_CS: GPIO 33
-- T_IRQ: GPIO 36
-- T_CLK: Shared with display SCLK
-- T_DIN: Shared with display MOSI
-- T_DO: GPIO 19
+The Flask web dashboard (`api/`) works with this board via USB serial:
 
-### Available GPIO for Extensions
-- GPIO 22: Buzzer output
-- GPIO 27: Available
-- GPIO 35: Input only (no pull-up)
+```bash
+cd api
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+python flockyou.py
+```
 
-## Performance Notes
+Access at `http://localhost:5000` for:
+- Real-time detection display
+- GPS integration
+- CSV/KML export
+- Detection history
 
-- Display updates are throttled to 1Hz to maintain scanning performance
-- Touch debouncing implemented with 200ms delay
-- Channel hopping continues during display updates
-- BLE scanning runs in parallel with WiFi monitoring
+## Differences from Upstream
+
+This fork differs from the main Flock-You project:
+
+| Feature | Upstream | This Fork |
+|---------|----------|-----------|
+| Target board | Xiao ESP32 S3 / 3.5" CYD | ESP32-2432S028R (2.8") |
+| Display | ILI9488 480x320 | ILI9341 320x240 |
+| Touch bus | Shared VSPI | Separate HSPI |
+| Touch calibration | Hardcoded | 4-point with SD persistence |
+| RGB LED | N/A | Full PWM control with state machine |
+| Backlight | Single pin | Dual pin PWM |
 
 ## Legal Disclaimer
 
-This tool is for educational and research purposes only. Users must comply with local laws regarding wireless monitoring and privacy. The detection of surveillance devices should only be done where legally permitted.
+This tool is for educational and research purposes only. Users must comply with local laws regarding wireless monitoring and privacy. Detection of surveillance devices should only be performed where legally permitted.
 
 ## Credits
 
-Based on the original Flock You project, adapted for ESP32-2432S035C hardware with enhanced visual interface and touch controls.
+- Original [Flock-You](https://github.com/fuzzzy-kyle/flock-you-cyd) project
+- Detection patterns from [DeFlock](https://deflock.me) crowdsourced database
+- Hardware analysis and adaptation for ESP32-2432S028R

@@ -12,7 +12,7 @@
 #include "esp_wifi_types.h"
 
 #ifdef CYD_DISPLAY
-#include "display_handler.h"
+#include "display_handler_28.h"
 #endif
 
 // ============================================================================
@@ -20,24 +20,37 @@
 // ============================================================================
 
 // Hardware Configuration
+#define BUZZER_ENABLED 0  // Set to 1 to enable buzzer, 0 to disable
+
 #ifdef CYD_DISPLAY
 #define BUZZER_PIN 22  // GPIO22 - Available GPIO on CYD board
 #else
 #define BUZZER_PIN 3   // GPIO3 (D2) - PWM capable pin on Xiao ESP32 S3
 #endif
 
-// RGB LED — active LOW on ESP32-2432S028R
+// RGB LED — active LOW on ESP32-2432S028R (PWM for brightness)
 #define RGB_R  4
 #define RGB_G  16
 #define RGB_B  17
+#define LED_CH_R  0  // LEDC channel for red
+#define LED_CH_G  1  // LEDC channel for green
+#define LED_CH_B  2  // LEDC channel for blue
 
-// LED flash state (triggered on detection, strobed in loop)
-static bool     led_flashing    = false;
-static uint32_t led_flash_start = 0;
-static bool     led_flash_state = false;
+// LED States
+enum LedState {
+    LED_SCANNING,    // Green at 50% - no detections
+    LED_DETECTED,    // Red flashing - active detection
+    LED_ALERT        // Orange solid - recent detection, signal lost
+};
+
+static LedState led_state = LED_SCANNING;
+static bool     led_flash_on = false;
 static uint32_t led_last_toggle = 0;
-#define LED_FLASH_DURATION  10000  // 10 s total
-#define LED_FLASH_INTERVAL    150  // toggle every 150 ms
+static uint32_t led_detection_time = 0;
+static int8_t   led_detection_rssi = -100;  // Signal strength for flash rate
+#define LED_ALERT_TIMEOUT  15000  // 15s after detection before returning to scanning
+#define LED_FLASH_MIN_INTERVAL  50   // Fastest flash (strong signal)
+#define LED_FLASH_MAX_INTERVAL  400  // Slowest flash (weak signal)
 
 // Audio Configuration
 #define LOW_FREQ 200      // Boot sequence - low pitch
@@ -131,6 +144,10 @@ static uint32_t detected_device_count = 0;
 
 void beep(int frequency, int duration_ms)
 {
+#if !BUZZER_ENABLED
+    (void)frequency; (void)duration_ms;  // Suppress unused warnings
+    return;
+#else
 #ifdef CYD_DISPLAY
     // CYD may not have a buzzer by default, implement visual/audio feedback
     // You can add an external buzzer to GPIO22
@@ -142,46 +159,116 @@ void beep(int frequency, int duration_ms)
     tone(BUZZER_PIN, frequency, duration_ms);
     delay(duration_ms + 50);
 #endif
+#endif
 }
 
 // ============================================================================
 // RGB LED ALERT
 // ============================================================================
 
+// Set RGB LED using PWM (active LOW, so invert values)
+// Applies rgbBrightness scaling when display handler is available
+static inline void rgb_pwm(uint8_t r, uint8_t g, uint8_t b) {
+#ifdef CYD_DISPLAY
+    // Scale by RGB brightness setting (0-255)
+    uint8_t scale = display.getRgbBrightness();
+    r = (r * scale) / 255;
+    g = (g * scale) / 255;
+    b = (b * scale) / 255;
+#endif
+    // Active LOW: 255 = off, 0 = full brightness
+    ledcWrite(LED_CH_R, 255 - r);
+    ledcWrite(LED_CH_G, 255 - g);
+    ledcWrite(LED_CH_B, 255 - b);
+}
+
+// Simple on/off for backward compatibility
 static inline void rgb_set(bool r, bool g, bool b) {
-    // Active LOW: LOW = on, HIGH = off
-    digitalWrite(RGB_R, r ? LOW : HIGH);
-    digitalWrite(RGB_G, g ? LOW : HIGH);
-    digitalWrite(RGB_B, b ? LOW : HIGH);
+    rgb_pwm(r ? 255 : 0, g ? 255 : 0, b ? 255 : 0);
 }
 
-// Call once on detection — starts the 10-second red strobe
+// Initialize RGB LED PWM
+void led_init(void) {
+    ledcSetup(LED_CH_R, 5000, 8);  // 5kHz, 8-bit
+    ledcSetup(LED_CH_G, 5000, 8);
+    ledcSetup(LED_CH_B, 5000, 8);
+    ledcAttachPin(RGB_R, LED_CH_R);
+    ledcAttachPin(RGB_G, LED_CH_G);
+    ledcAttachPin(RGB_B, LED_CH_B);
+    rgb_pwm(0, 0, 0);  // Start off
+}
+
+// Call on detection — triggers red flash state
+void led_flash_trigger(int8_t rssi) {
+    led_state = LED_DETECTED;
+    led_detection_time = millis();
+    led_detection_rssi = rssi;
+    led_flash_on = true;
+    led_last_toggle = millis();
+    rgb_pwm(255, 0, 0);  // Immediate red flash
+}
+
+// Overload for backward compatibility
 void led_flash_trigger(void) {
-    led_flashing     = true;
-    led_flash_start  = millis();
-    led_flash_state  = true;
-    led_last_toggle  = millis();
-    rgb_set(true, false, false);   // immediate first flash (red)
+    led_flash_trigger(-70);  // Default RSSI
 }
 
-// Call every loop iteration — handles the strobe timing & auto-stop
+// Calculate flash interval based on signal strength
+uint32_t get_flash_interval(int8_t rssi) {
+    // Stronger signal (less negative) = faster flash
+    // RSSI typically -30 (very strong) to -90 (very weak)
+    if (rssi >= -40) return LED_FLASH_MIN_INTERVAL;      // Very strong: 50ms
+    if (rssi >= -50) return 100;
+    if (rssi >= -60) return 150;
+    if (rssi >= -70) return 200;
+    if (rssi >= -80) return 300;
+    return LED_FLASH_MAX_INTERVAL;  // Weak: 400ms
+}
+
+// Call every loop iteration — handles LED state machine
 void led_flash_update(void) {
-    if (!led_flashing) return;
+#ifdef CYD_DISPLAY
+    // Check if LED alerts are disabled
+    if (!display.isLedAlertsEnabled()) {
+        rgb_pwm(0, 0, 0);  // LED off when disabled
+        return;
+    }
+#endif
 
     uint32_t now = millis();
 
-    // 10 seconds elapsed -> stop, LED off
-    if (now - led_flash_start >= LED_FLASH_DURATION) {
-        led_flashing = false;
-        rgb_set(false, false, false);
-        return;
-    }
+    switch (led_state) {
+        case LED_SCANNING:
+            // Green at 50% brightness
+            rgb_pwm(0, 128, 0);
+            break;
 
-    // Toggle every 150 ms
-    if (now - led_last_toggle >= LED_FLASH_INTERVAL) {
-        led_flash_state = !led_flash_state;
-        rgb_set(led_flash_state, false, false);   // red only
-        led_last_toggle = now;
+        case LED_DETECTED: {
+            // Red flashing, speed based on signal strength
+            uint32_t interval = get_flash_interval(led_detection_rssi);
+
+            if (now - led_last_toggle >= interval) {
+                led_flash_on = !led_flash_on;
+                rgb_pwm(led_flash_on ? 255 : 0, 0, 0);
+                led_last_toggle = now;
+            }
+
+            // After 5 seconds of no new detection, transition to alert
+            if (now - led_detection_time >= 5000) {
+                led_state = LED_ALERT;
+            }
+            break;
+        }
+
+        case LED_ALERT:
+            // Orange solid (red + green)
+            rgb_pwm(255, 100, 0);
+
+            // After timeout, return to scanning
+            if (now - led_detection_time >= LED_ALERT_TIMEOUT) {
+                led_state = LED_SCANNING;
+            }
+            break;
     }
 }
 
@@ -555,7 +642,7 @@ void wifi_sniffer_packet_handler(void* buff, wifi_promiscuous_pkt_type_t type)
             if (!triggered) {
                 triggered = true;
                 flock_detected_beep_sequence();
-                led_flash_trigger();
+                led_flash_trigger(ppkt->rx_ctrl.rssi);
             }
         }
         // Always update detection time for heartbeat tracking
@@ -574,7 +661,7 @@ void wifi_sniffer_packet_handler(void* buff, wifi_promiscuous_pkt_type_t type)
             if (!triggered) {
                 triggered = true;
                 flock_detected_beep_sequence();
-                led_flash_trigger();
+                led_flash_trigger(ppkt->rx_ctrl.rssi);
             }
         }
         // Always update detection time for heartbeat tracking
@@ -617,7 +704,7 @@ class AdvertisedDeviceCallbacks: public NimBLEAdvertisedDeviceCallbacks {
                 if (!triggered) {
                     triggered = true;
                     flock_detected_beep_sequence();
-                    led_flash_trigger();
+                    led_flash_trigger(rssi);
                 }
             }
             // Always update detection time for heartbeat tracking
@@ -635,7 +722,7 @@ class AdvertisedDeviceCallbacks: public NimBLEAdvertisedDeviceCallbacks {
                 if (!triggered) {
                     triggered = true;
                     flock_detected_beep_sequence();
-                    led_flash_trigger();
+                    led_flash_trigger(rssi);
                 }
             }
             // Always update detection time for heartbeat tracking
@@ -680,18 +767,35 @@ void setup()
     if (!display.begin()) {
         Serial.println("Failed to initialize display!");
     }
-    display.showInfo("Initializing...");
+    // Note: Don't show info here - display.begin() may have started calibration mode
 #endif
 
     // Initialize buzzer
+#if BUZZER_ENABLED
     pinMode(BUZZER_PIN, OUTPUT);
     digitalWrite(BUZZER_PIN, LOW);
+#endif
 
-    // Initialize RGB LED (active LOW — all off = all HIGH)
-    pinMode(RGB_R, OUTPUT);
-    pinMode(RGB_G, OUTPUT);
-    pinMode(RGB_B, OUTPUT);
-    rgb_set(false, false, false);
+    // Initialize RGB LED with PWM
+    led_init();
+
+    // LED boot test - cycle R, G, B to verify hardware
+    printf("LED boot test: RED...\n");
+    rgb_pwm(255, 0, 0);   // Red
+    delay(400);
+    printf("LED boot test: GREEN...\n");
+    rgb_pwm(0, 255, 0);   // Green
+    delay(400);
+    printf("LED boot test: BLUE...\n");
+    rgb_pwm(0, 0, 255);   // Blue
+    delay(400);
+    printf("LED boot test: ORANGE...\n");
+    rgb_pwm(255, 100, 0);  // Orange
+    delay(400);
+    printf("LED boot test: Scanning mode (green 50%%)\n");
+    rgb_pwm(0, 128, 0);   // Green 50%
+    delay(400);
+
     boot_beep_sequence();
     
     printf("Starting Flock Squawk Enhanced Detection System...\n\n");
@@ -721,8 +825,10 @@ void setup()
     printf("System ready - hunting for Flock Safety devices...\n\n");
 
 #ifdef CYD_DISPLAY
-    display.showInfo("System Ready");
-    display.updateScanStatus(true);
+    // Only show system ready if not in calibration mode
+    if (display.getCurrentPage() != DisplayHandler::PAGE_CALIBRATE) {
+        display.updateScanStatus(true);
+    }
 #endif
 
     last_channel_hop = millis();
