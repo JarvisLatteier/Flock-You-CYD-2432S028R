@@ -32,6 +32,12 @@ This fork targets the **ESP32-2432S028R** (2.8" CYD) specifically.
   - Touch calibration persistence
   - Status display in settings page
 
+- **OUI Vendor Lookup**
+  - Embedded lookup for surveillance OUIs (Flock Safety, Hikvision, Dahua, etc.)
+  - SD card lookup via `oui.csv` for 37,000+ IEEE OUI entries
+  - Vendor names shown in detection list and main panel
+  - Vendor column added to CSV log output
+
 - **Display Handler** (`display_handler_28.cpp/h`)
   - Separate HSPI bus for XPT2046 touch controller
   - Dual backlight PWM (GPIO 27 + 21)

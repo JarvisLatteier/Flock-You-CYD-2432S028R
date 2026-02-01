@@ -355,21 +355,36 @@ void DisplayHandler::drawMainPage() {
         tft.setCursor(70, yPos + 4);
         tft.print(latest.ssid.substring(0, 24));
 
+        // Vendor (highlighted if known threat)
+        tft.setTextColor(latest.vendor == "Flock Safety" ? ALERT_COLOR : ACCENT_COLOR);
+        tft.setCursor(10, yPos + 18);
+        tft.print(latest.vendor.substring(0, 20));
+
         // MAC
         tft.setTextColor(TEXT_DIM);
-        tft.setCursor(10, yPos + 18);
+        tft.setCursor(10, yPos + 32);
         tft.print(latest.mac);
 
-        // RSSI
-        tft.setCursor(10, yPos + 32);
+        // RSSI + signal bars
         tft.setTextColor(TEXT_COLOR);
+        tft.setCursor(150, yPos + 32);
         tft.printf("%ddBm", latest.rssi);
-        drawSignalStrength(80, yPos + 30, latest.rssi);
+        drawSignalStrength(200, yPos + 30, latest.rssi);
 
-        // Type
+        // Type badge
         tft.setTextColor(latest.type == "BLE" ? BLE_COLOR : WIFI_COLOR);
-        tft.setCursor(260, yPos + 32);
+        tft.setCursor(10, yPos + 46);
         tft.print(latest.type == "BLE" ? "BLE" : "WiFi");
+
+        // Timestamp
+        tft.setTextColor(TEXT_DIM);
+        tft.setCursor(50, yPos + 46);
+        uint32_t age = (millis() - latest.timestamp) / 1000;
+        if (age < 60) {
+            tft.printf("%ds ago", age);
+        } else {
+            tft.printf("%dm ago", age / 60);
+        }
     } else {
         tft.fillRect(5, yPos, 310, panelHeight, BG_DARK);
         tft.drawRect(5, yPos, 310, panelHeight, TEXT_DIM);
@@ -449,10 +464,16 @@ void DisplayHandler::drawListPage() {
         String ssidTrunc = det.ssid.substring(0, 22);
         tft.print(ssidTrunc);
 
-        // MAC and RSSI on second line
-        tft.setTextColor(TEXT_DIM);
-        tft.setCursor(8, yPos + 13);
-        tft.print(det.mac.substring(0, 17));
+        // Vendor or MAC on second line
+        if (det.vendor != "Unknown") {
+            tft.setTextColor(det.vendor == "Flock Safety" ? ALERT_COLOR : ACCENT_COLOR);
+            tft.setCursor(8, yPos + 13);
+            tft.print(det.vendor.substring(0, 20));
+        } else {
+            tft.setTextColor(TEXT_DIM);
+            tft.setCursor(8, yPos + 13);
+            tft.print(det.mac.substring(0, 17));
+        }
 
         // RSSI value
         tft.setTextColor(TEXT_COLOR);
@@ -1060,10 +1081,151 @@ void DisplayHandler::clearTouchZones() {
     touchZones.clear();
 }
 
+// ============================================================================
+// OUI LOOKUP
+// ============================================================================
+
+// Embedded OUI table for known surveillance and common vendors (fast lookup)
+const char* DisplayHandler::lookupEmbeddedOUI(const char* prefix) {
+    // Known Flock Safety / Surveillance OUIs
+    if (strncasecmp(prefix, "58:8e:81", 8) == 0) return "Flock Safety";
+    if (strncasecmp(prefix, "cc:cc:cc", 8) == 0) return "Flock Safety";
+    if (strncasecmp(prefix, "ec:1b:bd", 8) == 0) return "Flock Safety";
+    if (strncasecmp(prefix, "90:35:ea", 8) == 0) return "Flock Safety";
+    if (strncasecmp(prefix, "04:0d:84", 8) == 0) return "Flock Safety";
+    if (strncasecmp(prefix, "f0:82:c0", 8) == 0) return "Flock Safety";
+    if (strncasecmp(prefix, "1c:34:f1", 8) == 0) return "Flock Safety";
+    if (strncasecmp(prefix, "38:5b:44", 8) == 0) return "Flock Safety";
+    if (strncasecmp(prefix, "94:34:69", 8) == 0) return "Flock Safety";
+    if (strncasecmp(prefix, "b4:e3:f9", 8) == 0) return "Flock Safety";
+    if (strncasecmp(prefix, "70:c9:4e", 8) == 0) return "Flock Safety";
+    if (strncasecmp(prefix, "3c:91:80", 8) == 0) return "Flock Safety";
+    if (strncasecmp(prefix, "d8:f3:bc", 8) == 0) return "Flock Safety";
+    if (strncasecmp(prefix, "80:30:49", 8) == 0) return "Flock Safety";
+    if (strncasecmp(prefix, "14:5a:fc", 8) == 0) return "Flock Safety";
+    if (strncasecmp(prefix, "74:4c:a1", 8) == 0) return "Flock Safety";
+    if (strncasecmp(prefix, "08:3a:88", 8) == 0) return "Flock Safety";
+    if (strncasecmp(prefix, "9c:2f:9d", 8) == 0) return "Flock Safety";
+    if (strncasecmp(prefix, "94:08:53", 8) == 0) return "Flock Safety";
+    if (strncasecmp(prefix, "e4:aa:ea", 8) == 0) return "Flock Safety";
+
+    // Common camera/IoT manufacturers
+    if (strncasecmp(prefix, "ac:cf:85", 8) == 0) return "Hikvision";
+    if (strncasecmp(prefix, "c0:56:e3", 8) == 0) return "Hikvision";
+    if (strncasecmp(prefix, "44:19:b6", 8) == 0) return "Hikvision";
+    if (strncasecmp(prefix, "54:c4:15", 8) == 0) return "Hikvision";
+    if (strncasecmp(prefix, "e0:50:8b", 8) == 0) return "Dahua";
+    if (strncasecmp(prefix, "3c:ef:8c", 8) == 0) return "Dahua";
+    if (strncasecmp(prefix, "a0:bd:1d", 8) == 0) return "Dahua";
+    if (strncasecmp(prefix, "9c:8e:cd", 8) == 0) return "Amcrest";
+    if (strncasecmp(prefix, "fc:fc:48", 8) == 0) return "Apple";
+    if (strncasecmp(prefix, "3c:06:30", 8) == 0) return "Apple";
+    if (strncasecmp(prefix, "00:17:88", 8) == 0) return "Philips Hue";
+    if (strncasecmp(prefix, "b8:27:eb", 8) == 0) return "Raspberry Pi";
+    if (strncasecmp(prefix, "dc:a6:32", 8) == 0) return "Raspberry Pi";
+    if (strncasecmp(prefix, "18:fe:34", 8) == 0) return "Espressif";
+    if (strncasecmp(prefix, "24:0a:c4", 8) == 0) return "Espressif";
+    if (strncasecmp(prefix, "30:ae:a4", 8) == 0) return "Espressif";
+    if (strncasecmp(prefix, "84:cc:a8", 8) == 0) return "Espressif";
+    if (strncasecmp(prefix, "b4:e6:2d", 8) == 0) return "Espressif";
+    if (strncasecmp(prefix, "50:02:91", 8) == 0) return "Espressif";
+    if (strncasecmp(prefix, "34:94:54", 8) == 0) return "Espressif";
+
+    return nullptr;  // Not found in embedded table
+}
+
+// Binary search lookup in SD card OUI file
+String DisplayHandler::lookupOUIFromSD(const String& prefix) {
+    if (!sdCardPresent) return "";
+    if (!SD.exists(OUI_FILE)) return "";
+
+    File file = SD.open(OUI_FILE, FILE_READ);
+    if (!file) return "";
+
+    // Binary search through sorted file
+    size_t fileSize = file.size();
+    size_t low = 0, high = fileSize;
+    String searchPrefix = prefix;
+    searchPrefix.toLowerCase();
+
+    char lineBuf[64];
+    String result = "";
+
+    while (low < high) {
+        size_t mid = (low + high) / 2;
+
+        // Seek to mid and find start of line
+        file.seek(mid);
+        if (mid > 0) {
+            // Skip to next line
+            while (file.available() && file.read() != '\n');
+        }
+
+        if (!file.available()) {
+            high = mid;
+            continue;
+        }
+
+        // Read line
+        size_t lineStart = file.position();
+        int len = file.readBytesUntil('\n', lineBuf, sizeof(lineBuf) - 1);
+        if (len <= 0) {
+            high = mid;
+            continue;
+        }
+        lineBuf[len] = '\0';
+
+        // Parse OUI prefix (first 8 chars)
+        if (len < 8) {
+            high = mid;
+            continue;
+        }
+
+        String linePrefix = String(lineBuf).substring(0, 8);
+        linePrefix.toLowerCase();
+
+        int cmp = searchPrefix.compareTo(linePrefix);
+        if (cmp == 0) {
+            // Found! Extract vendor name after comma
+            char* comma = strchr(lineBuf, ',');
+            if (comma) {
+                result = String(comma + 1);
+                result.trim();
+            }
+            break;
+        } else if (cmp < 0) {
+            high = lineStart;
+        } else {
+            low = file.position();
+        }
+    }
+
+    file.close();
+    return result;
+}
+
+// Main OUI lookup: embedded first, then SD card fallback
+String DisplayHandler::lookupOUI(const String& mac) {
+    // Extract prefix (first 8 chars: "aa:bb:cc")
+    if (mac.length() < 8) return "Unknown";
+    String prefix = mac.substring(0, 8);
+
+    // Try embedded lookup first (fast)
+    const char* embedded = lookupEmbeddedOUI(prefix.c_str());
+    if (embedded) return String(embedded);
+
+    // Try SD card lookup (slower but comprehensive)
+    String sdResult = lookupOUIFromSD(prefix);
+    if (sdResult.length() > 0) return sdResult;
+
+    return "Unknown";
+}
+
 void DisplayHandler::addDetection(String ssid, String mac, int8_t rssi, String type) {
     Detection det;
     det.ssid = ssid;
     det.mac = mac;
+    det.vendor = lookupOUI(mac);
     det.rssi = rssi;
     det.type = type;
     det.timestamp = millis();
@@ -1268,7 +1430,7 @@ bool DisplayHandler::initSDCard() {
     if (!SD.exists(logFileName)) {
         File file = SD.open(logFileName, FILE_WRITE);
         if (file) {
-            file.println("timestamp,ssid,mac,rssi,type");
+            file.println("timestamp,ssid,mac,vendor,rssi,type");
             file.close();
             Serial.println("SD Card: Created log file");
         }
@@ -1283,11 +1445,15 @@ void DisplayHandler::logDetection(const String& ssid, const String& mac, int8_t 
 
     File file = SD.open(logFileName, FILE_APPEND);
     if (file) {
-        // Format: timestamp,ssid,mac,rssi,type
-        file.printf("%lu,\"%s\",%s,%d,%s\n",
+        // Lookup vendor for logging
+        String vendor = lookupOUI(mac);
+
+        // Format: timestamp,ssid,mac,vendor,rssi,type
+        file.printf("%lu,\"%s\",%s,\"%s\",%d,%s\n",
             millis() / 1000,  // seconds since boot
             ssid.c_str(),
             mac.c_str(),
+            vendor.c_str(),
             rssi,
             type.c_str()
         );

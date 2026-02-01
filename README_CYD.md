@@ -94,7 +94,26 @@ Manual recalibration available via CAL button in footer.
 ### SD Card Features
 - **Detection logging**: All detections logged to `/flockyou_detections.csv`
 - **Calibration persistence**: Touch calibration saved to `/touch_cal.txt`
-- **Format**: CSV with timestamp, SSID, MAC, RSSI, type
+- **OUI vendor lookup**: Copy `oui.csv` to SD card root for MAC vendor identification
+- **Log format**: CSV with timestamp, SSID, MAC, vendor, RSSI, type
+
+### OUI Vendor Lookup
+The system identifies device manufacturers from MAC addresses using a hybrid approach:
+
+**Embedded lookup (instant):**
+- Flock Safety / surveillance device OUIs
+- Common camera manufacturers (Hikvision, Dahua, Amcrest)
+- Common IoT vendors (Apple, Espressif, Raspberry Pi)
+
+**SD card lookup (comprehensive):**
+- Copy `oui.csv` from the repo to your SD card root
+- Contains 37,000+ IEEE OUI entries
+- Binary search for fast lookups (~10ms)
+
+Vendor names display in:
+- Main page latest detection panel
+- Detection list (replaces MAC when vendor is known)
+- SD card log file
 
 ## Installation
 

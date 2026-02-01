@@ -36,6 +36,7 @@
 #define TOUCH_RAW_X_MIN_DEFAULT 604
 #define TOUCH_RAW_X_MAX_DEFAULT 3571
 #define TOUCH_CAL_FILE "/touch_cal.txt"
+#define OUI_FILE "/oui.csv"
 
 // Modern dark theme color scheme (RGB565)
 #define BG_COLOR      0x0841          // Deep charcoal (#080808 -> darker feel)
@@ -87,11 +88,17 @@ private:
     struct Detection {
         String ssid;
         String mac;
+        String vendor;
         int8_t rssi;
         String type;
         uint32_t timestamp;
         bool isNew;
     };
+
+    // OUI lookup
+    String lookupOUI(const String& mac);
+    String lookupOUIFromSD(const String& prefix);
+    static const char* lookupEmbeddedOUI(const char* prefix);
 
     std::vector<Detection> detections;
     uint32_t totalDetections;
