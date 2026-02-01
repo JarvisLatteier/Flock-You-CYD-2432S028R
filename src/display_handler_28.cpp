@@ -49,6 +49,7 @@ DisplayHandler::DisplayHandler() : tft(), touchSPI(HSPI) {
     bleScanning = false;
     sdCardPresent = false;
     detectionsLogged = 0;
+    lastSdCheck = 0;
     autoBrightness = false;
     rgbBrightness = 128;  // 50% default
     lastLdrRead = 0;
@@ -82,36 +83,172 @@ bool DisplayHandler::begin() {
     // Initialize LDR for auto brightness
     pinMode(LDR_PIN, INPUT);
 
-    // Show splash screen
-    tft.fillScreen(BG_DARK);
+    // === ANIMATED BOOT SCREEN ===
+    tft.fillScreen(TFT_BLACK);
 
-    // Main title
-    tft.setTextColor(TEXT_COLOR);
-    tft.setTextSize(3);
-    tft.setCursor(65, 60);
-    tft.print("FLOCK YOU");
-
-    // Subtitle
-    tft.setTextSize(2);
-    tft.setTextColor(ACCENT_COLOR);
-    tft.setCursor(45, 110);
-    tft.print("Surveillance Detector");
-
-    // Version
-    tft.setTextSize(1);
-    tft.setTextColor(TEXT_DIM);
-    tft.setCursor(100, 160);
-    tft.print("v1.0.0");
-
-    // Animated loading dots
-    tft.setTextColor(SUCCESS_COLOR);
-    for (int i = 0; i < 3; i++) {
-        tft.setCursor(130 + i * 20, 200);
-        tft.print(".");
-        delay(400);
+    // Scan lines effect (top to bottom) - slower
+    for (int y = 0; y < 240; y += 3) {
+        tft.drawFastHLine(0, y, 320, 0x0841);
+        delay(10);
     }
 
+    delay(200);
+
+    // Title typing effect - larger, centered
+    tft.setTextSize(4);
+    tft.setTextColor(ALERT_COLOR);
+    const char* title = "FLOCK YOU";
+    int titleX = 28;
+    int titleY = 20;
+    for (int i = 0; title[i]; i++) {
+        tft.setCursor(titleX + i * 24, titleY);
+        tft.print(title[i]);
+        delay(120);
+    }
+
+    delay(200);
+
+    // Glitch effect on title - slower
+    for (int g = 0; g < 4; g++) {
+        tft.setTextColor(TFT_BLACK);
+        tft.setCursor(titleX, titleY);
+        tft.print("FLOCK YOU");
+        delay(80);
+        tft.setTextColor(g % 2 ? ALERT_COLOR : ACCENT_COLOR);
+        tft.setCursor(titleX + (g % 2 ? 3 : -3), titleY);
+        tft.print("FLOCK YOU");
+        delay(80);
+    }
+    tft.fillRect(20, 15, 280, 40, TFT_BLACK);
+    tft.setTextColor(TEXT_COLOR);
+    tft.setCursor(titleX, titleY);
+    tft.print("FLOCK YOU");
+
+    delay(300);
+
+    // Subtitle - larger
+    tft.setTextSize(2);
+    tft.setTextColor(ACCENT_COLOR);
+    tft.setCursor(18, 60);
+    tft.print("SURVEILLANCE DETECTOR");
+
+    delay(400);
+
+    // Animated radar sweep - larger, centered lower
+    int centerX = 160, centerY = 140, radius = 65;
+
+    // Draw radar grid
+    tft.drawCircle(centerX, centerY, radius, 0x2945);
+    tft.drawCircle(centerX, centerY, radius * 2 / 3, 0x2104);
+    tft.drawCircle(centerX, centerY, radius / 3, 0x2104);
+    tft.drawFastHLine(centerX - radius, centerY, radius * 2, 0x2945);
+    tft.drawFastVLine(centerX, centerY - radius, radius * 2, 0x2945);
+
+    // Corner markers
+    tft.drawLine(centerX - radius + 5, centerY - radius + 5, centerX - radius + 15, centerY - radius + 5, ACCENT_COLOR);
+    tft.drawLine(centerX - radius + 5, centerY - radius + 5, centerX - radius + 5, centerY - radius + 15, ACCENT_COLOR);
+    tft.drawLine(centerX + radius - 5, centerY - radius + 5, centerX + radius - 15, centerY - radius + 5, ACCENT_COLOR);
+    tft.drawLine(centerX + radius - 5, centerY - radius + 5, centerX + radius - 5, centerY - radius + 15, ACCENT_COLOR);
+    tft.drawLine(centerX - radius + 5, centerY + radius - 5, centerX - radius + 15, centerY + radius - 5, ACCENT_COLOR);
+    tft.drawLine(centerX - radius + 5, centerY + radius - 5, centerX - radius + 5, centerY + radius - 15, ACCENT_COLOR);
+    tft.drawLine(centerX + radius - 5, centerY + radius - 5, centerX + radius - 15, centerY + radius - 5, ACCENT_COLOR);
+    tft.drawLine(centerX + radius - 5, centerY + radius - 5, centerX + radius - 5, centerY + radius - 15, ACCENT_COLOR);
+
+    // Radar sweep - slower
+    for (int angle = 0; angle < 360; angle += 4) {
+        float rad = angle * 3.14159 / 180.0;
+        int x2 = centerX + cos(rad) * radius;
+        int y2 = centerY - sin(rad) * radius;
+
+        // Draw sweep line (thicker effect)
+        tft.drawLine(centerX, centerY, x2, y2, SUCCESS_COLOR);
+        int x3 = centerX + cos(rad - 0.1) * radius;
+        int y3 = centerY - sin(rad - 0.1) * radius;
+        tft.drawLine(centerX, centerY, x3, y3, 0x0320);
+
+        delay(15);
+
+        // Fade sweep line
+        tft.drawLine(centerX, centerY, x2, y2, 0x0320);
+        tft.drawLine(centerX, centerY, x3, y3, 0x0100);
+
+        // Random "detections" on radar - more visible
+        if (angle % 45 == 0 && angle > 0) {
+            float detectRad = (angle - 60) * 3.14159 / 180.0;
+            int bx = centerX + cos(detectRad) * (radius * 0.5 + (angle % 90 ? 10 : -10));
+            int by = centerY - sin(detectRad) * (radius * 0.5);
+            tft.fillCircle(bx, by, 4, ALERT_COLOR);
+            delay(50);
+        }
+    }
+
+    delay(400);
+
+    // Clear radar area
+    tft.fillRect(centerX - radius - 5, centerY - radius - 5, radius * 2 + 10, radius * 2 + 10, TFT_BLACK);
+
+    // Status messages - smaller text
+    const char* messages[] = {
+        "Initializing WiFi",
+        "Starting BLE scanner",
+        "Loading patterns",
+        "Checking SD card",
+        "System ready"
+    };
+    uint16_t msgColors[] = {WIFI_COLOR, BLE_COLOR, ALERT_COLOR, ACCENT_COLOR, SUCCESS_COLOR};
+
+    tft.setTextSize(1);
+    int msgY = 100;
+    for (int i = 0; i < 5; i++) {
+        tft.setTextColor(msgColors[i]);
+        tft.setCursor(30, msgY + i * 16);
+
+        // Type each message - slower
+        for (int c = 0; messages[i][c]; c++) {
+            tft.print(messages[i][c]);
+            delay(30);
+        }
+
+        // Dots animation
+        tft.setTextColor(TEXT_DIM);
+        for (int d = 0; d < 3; d++) {
+            tft.print(".");
+            delay(150);
+        }
+
+        // Show OK
+        tft.setTextColor(SUCCESS_COLOR);
+        tft.print(" OK");
+        delay(200);
+    }
+
+    // Final ready state
     delay(500);
+    tft.fillScreen(TFT_BLACK);
+
+    // Big "HUNTING" message - centered
+    tft.setTextSize(3);
+    tft.setTextColor(SUCCESS_COLOR);
+    tft.setCursor(97, 100);  // Centered: (320 - 7*18) / 2
+    tft.print("HUNTING");
+
+    tft.setTextSize(2);
+    tft.setTextColor(ALERT_COLOR);
+    tft.setCursor(46, 140);  // Centered: (320 - 19*12) / 2
+    tft.print("for surveillance...");
+
+    // Animated brackets - centered around HUNTING
+    for (int i = 0; i < 3; i++) {
+        tft.setTextColor(i % 2 ? SUCCESS_COLOR : ACCENT_COLOR);
+        tft.setTextSize(3);
+        tft.setCursor(70, 100);
+        tft.print(">");
+        tft.setCursor(232, 100);
+        tft.print("<");
+        delay(300);
+    }
+
+    delay(600);
 
     // Try to load calibration from SD card
     if (sdCardPresent && loadCalibration()) {
@@ -130,6 +267,9 @@ bool DisplayHandler::begin() {
 
 void DisplayHandler::update() {
     uint32_t now = millis();
+
+    // Check SD card status periodically (every 5 seconds)
+    checkSDCard();
 
     // Update auto brightness if enabled
     updateAutoBrightness();
@@ -309,116 +449,209 @@ void DisplayHandler::drawFooter() {
 }
 
 void DisplayHandler::drawMainPage() {
-    uint16_t yPos = HEADER_HEIGHT + 4;
+    uint16_t contentBottom = tft.height() - FOOTER_HEIGHT;  // 208
+    uint16_t yPos = HEADER_HEIGHT + 2;  // 38
 
-    // === Compact Stats Row ===
+    // === Stats Bar ===
+    tft.fillRect(0, yPos, 320, 18, BG_DARK);
     tft.setTextSize(1);
 
-    // Total
+    // Total detections
     tft.setTextColor(TEXT_DIM);
-    tft.setCursor(10, yPos);
+    tft.setCursor(5, yPos + 5);
     tft.print("ALL:");
     tft.setTextColor(TEXT_COLOR);
     tft.printf("%d", totalDetections);
 
-    // Flock
+    // Flock count (red if any)
     tft.setTextColor((flockDetections > 0) ? ALERT_COLOR : TEXT_DIM);
-    tft.setCursor(80, yPos);
+    tft.setCursor(70, yPos + 5);
     tft.print("FLOCK:");
     tft.printf("%d", flockDetections);
 
-    // BLE
+    // BLE count
     tft.setTextColor(BLE_COLOR);
-    tft.setCursor(170, yPos);
+    tft.setCursor(155, yPos + 5);
     tft.print("BLE:");
     tft.setTextColor(TEXT_COLOR);
     tft.printf("%d", bleDetections);
 
-    yPos += 14;
+    // Scan mode indicator
+    tft.setCursor(230, yPos + 5);
+    if (bleScanning) {
+        tft.setTextColor(BLE_COLOR);
+        tft.print("BLE SCAN");
+    } else {
+        tft.setTextColor(WIFI_COLOR);
+        tft.printf("WiFi CH%d", currentChannel);
+    }
+
+    yPos += 20;
+
+    // Calculate remaining space for detection panel
+    // Leave 24px for status bar at bottom
+    uint16_t panelHeight = contentBottom - yPos - 26;  // ~120px
 
     // === Latest Detection Panel ===
-    uint16_t panelHeight = 70;
     if (!detections.empty()) {
         Detection& latest = detections.back();
         bool isThreat = (latest.type.indexOf("flock") >= 0 || latest.type.indexOf("Flock") >= 0 ||
                         latest.type.indexOf("Penguin") >= 0);
 
-        tft.fillRect(5, yPos, 310, panelHeight, BG_DARK);
-        tft.drawRect(5, yPos, 310, panelHeight, isThreat ? ALERT_COLOR : ACCENT_COLOR);
+        tft.fillRect(3, yPos, 314, panelHeight, BG_DARK);
+        tft.drawRect(3, yPos, 314, panelHeight, isThreat ? ALERT_COLOR : ACCENT_COLOR);
 
+        // Header row: label + SSID
         tft.setTextColor(isThreat ? ALERT_COLOR : ACCENT_COLOR);
-        tft.setCursor(10, yPos + 4);
-        tft.print(isThreat ? "! THREAT" : "LATEST");
+        tft.setTextSize(1);
+        tft.setCursor(8, yPos + 4);
+        tft.print(isThreat ? "! THREAT DETECTED" : "LATEST DETECTION");
 
-        // SSID
+        // SSID (larger)
+        tft.setTextSize(2);
         tft.setTextColor(TEXT_COLOR);
-        tft.setCursor(70, yPos + 4);
-        tft.print(latest.ssid.substring(0, 24));
+        tft.setCursor(8, yPos + 18);
+        tft.print(latest.ssid.substring(0, 18));
 
-        // Vendor (highlighted if known threat)
+        // Vendor row (highlighted)
+        tft.setTextSize(1);
         tft.setTextColor(latest.vendor == "Flock Safety" ? ALERT_COLOR : ACCENT_COLOR);
-        tft.setCursor(10, yPos + 18);
-        tft.print(latest.vendor.substring(0, 20));
+        tft.setCursor(8, yPos + 40);
+        tft.print("Vendor: ");
+        tft.setTextSize(2);
+        tft.print(latest.vendor.substring(0, 14));
 
-        // MAC
+        // MAC address + Type
+        tft.setTextSize(1);
         tft.setTextColor(TEXT_DIM);
-        tft.setCursor(10, yPos + 32);
+        tft.setCursor(8, yPos + 62);
+        tft.print("MAC: ");
+        tft.setTextColor(TEXT_COLOR);
         tft.print(latest.mac);
 
-        // RSSI + signal bars
-        tft.setTextColor(TEXT_COLOR);
-        tft.setCursor(150, yPos + 32);
-        tft.printf("%ddBm", latest.rssi);
-        drawSignalStrength(200, yPos + 30, latest.rssi);
-
-        // Type badge
         tft.setTextColor(latest.type == "BLE" ? BLE_COLOR : WIFI_COLOR);
-        tft.setCursor(10, yPos + 46);
-        tft.print(latest.type == "BLE" ? "BLE" : "WiFi");
+        tft.setCursor(180, yPos + 62);
+        tft.print(latest.type == "BLE" ? "[BLE]" : "[WiFi]");
 
-        // Timestamp
+        // Signal strength section
         tft.setTextColor(TEXT_DIM);
-        tft.setCursor(50, yPos + 46);
+        tft.setCursor(8, yPos + 78);
+        tft.print("Signal: ");
+        tft.setTextColor(TEXT_COLOR);
+        tft.printf("%ddBm ", latest.rssi);
+        drawSignalStrength(90, yPos + 76, latest.rssi);
+
+        // Signal quality text
+        tft.setCursor(120, yPos + 78);
+        if (latest.rssi >= -50) {
+            tft.setTextColor(SUCCESS_COLOR);
+            tft.print("(Excellent)");
+        } else if (latest.rssi >= -60) {
+            tft.setTextColor(SUCCESS_COLOR);
+            tft.print("(Good)");
+        } else if (latest.rssi >= -70) {
+            tft.setTextColor(ALERT_WARN);
+            tft.print("(Fair)");
+        } else {
+            tft.setTextColor(ALERT_COLOR);
+            tft.print("(Weak)");
+        }
+
+        // Timestamp and session count
+        tft.setTextColor(TEXT_DIM);
+        tft.setCursor(8, yPos + 94);
         uint32_t age = (millis() - latest.timestamp) / 1000;
         if (age < 60) {
-            tft.printf("%ds ago", age);
+            tft.printf("Detected %ds ago", age);
+        } else if (age < 3600) {
+            tft.printf("Detected %dm %ds ago", age / 60, age % 60);
         } else {
-            tft.printf("%dm ago", age / 60);
+            tft.printf("Detected %dh %dm ago", age / 3600, (age % 3600) / 60);
         }
+
+        tft.setCursor(200, yPos + 94);
+        tft.printf("Total: %d", totalDetections);
+
     } else {
-        tft.fillRect(5, yPos, 310, panelHeight, BG_DARK);
-        tft.drawRect(5, yPos, 310, panelHeight, TEXT_DIM);
+        tft.fillRect(3, yPos, 314, panelHeight, BG_DARK);
+        tft.drawRect(3, yPos, 314, panelHeight, TEXT_DIM);
+
+        // Centered "No detections" message
         tft.setTextColor(TEXT_DIM);
-        tft.setCursor(100, yPos + 20);
-        tft.print("No detections yet");
+        tft.setTextSize(2);
+        tft.setCursor(45, yPos + 30);
+        tft.print("No Detections");
+
+        tft.setTextSize(1);
+        tft.setCursor(55, yPos + 60);
+        tft.print("Scanning for surveillance");
+        tft.setCursor(85, yPos + 75);
+        tft.print("devices...");
+
+        // Show what we're looking for
+        tft.setTextColor(ALERT_COLOR);
+        tft.setCursor(30, yPos + 95);
+        tft.print("Flock Safety | Penguin | Pigvision");
     }
 
-    yPos += panelHeight + 8;
+    yPos += panelHeight + 2;
 
-    // === LED Key ===
-    tft.fillRect(5, yPos, 310, 45, BG_DARK);
-    tft.drawRect(5, yPos, 310, 45, TEXT_DIM);
+    // === Status Bar (bottom) ===
+    tft.fillRect(3, yPos, 314, 22, BG_DARK);
+    tft.drawRect(3, yPos, 314, 22, TEXT_DIM);
 
-    // Green = Scanning
-    tft.fillCircle(20, yPos + 12, 5, SUCCESS_COLOR);
+    tft.setTextSize(1);
+
+    // LED indicators
+    tft.fillCircle(12, yPos + 11, 4, SUCCESS_COLOR);
     tft.setTextColor(TEXT_COLOR);
-    tft.setCursor(30, yPos + 9);
-    tft.print("Scanning");
+    tft.setCursor(20, yPos + 7);
+    tft.print("Scan");
 
-    // Red flash = Detection
-    tft.fillCircle(110, yPos + 12, 5, ALERT_COLOR);
-    tft.setCursor(120, yPos + 9);
-    tft.print("Detection");
+    tft.fillCircle(62, yPos + 11, 4, ALERT_COLOR);
+    tft.setCursor(70, yPos + 7);
+    tft.print("Detect");
 
-    // Orange = Alert
-    tft.fillCircle(210, yPos + 12, 5, ALERT_WARN);
-    tft.setCursor(220, yPos + 9);
+    tft.fillCircle(122, yPos + 11, 4, ALERT_WARN);
+    tft.setCursor(130, yPos + 7);
     tft.print("Alert");
 
-    // Details
+    // Divider
+    tft.drawFastVLine(175, yPos + 4, 14, TEXT_DIM);
+
+    // SD card status
+    tft.setCursor(182, yPos + 7);
+    if (sdCardPresent) {
+        tft.setTextColor(SUCCESS_COLOR);
+        tft.print("SD");
+        tft.fillCircle(203, yPos + 11, 4, SUCCESS_COLOR);
+    } else {
+        tft.setTextColor(ALERT_COLOR);
+        tft.print("SD!");
+        tft.fillCircle(210, yPos + 11, 4, ALERT_COLOR);
+    }
+
+    // OUI database status
+    tft.setCursor(222, yPos + 7);
+    if (sdCardPresent && SD.exists(OUI_FILE)) {
+        tft.setTextColor(SUCCESS_COLOR);
+        tft.print("OUI");
+        tft.fillCircle(250, yPos + 11, 4, SUCCESS_COLOR);
+    } else {
+        tft.setTextColor(TEXT_DIM);
+        tft.print("OUI");
+        tft.fillCircle(250, yPos + 11, 4, TEXT_DIM);
+    }
+
+    // Uptime
     tft.setTextColor(TEXT_DIM);
-    tft.setCursor(10, yPos + 27);
-    tft.print("Flash speed increases with signal strength");
+    tft.setCursor(260, yPos + 7);
+    uint32_t uptime = millis() / 1000;
+    if (uptime < 3600) {
+        tft.printf("%dm", uptime / 60);
+    } else {
+        tft.printf("%dh", uptime / 3600);
+    }
 }
 
 void DisplayHandler::drawListPage() {
@@ -1438,6 +1671,55 @@ bool DisplayHandler::initSDCard() {
 
     Serial.printf("SD Card: Initialized, type=%d, size=%lluMB\n", cardType, SD.cardSize() / (1024 * 1024));
     return true;
+}
+
+void DisplayHandler::checkSDCard() {
+    uint32_t now = millis();
+
+    // Only check every 3 seconds
+    if (now - lastSdCheck < 3000) return;
+    lastSdCheck = now;
+
+    bool wasPresent = sdCardPresent;
+
+    if (sdCardPresent) {
+        // Card was present - try to access it to verify still there
+        // SD.exists() or opening a file is more reliable than cardType()
+        File testFile = SD.open("/");
+        if (!testFile) {
+            // Card was removed or became inaccessible
+            sdCardPresent = false;
+            SD.end();  // Clean up SD library state
+            Serial.println("SD Card: Removed");
+        } else {
+            testFile.close();
+        }
+    } else {
+        // Card was not present, try to initialize
+        if (SD.begin(SD_CS)) {
+            File testFile = SD.open("/");
+            if (testFile) {
+                testFile.close();
+                sdCardPresent = true;
+                Serial.println("SD Card: Inserted");
+
+                // Re-setup log file if needed
+                if (!SD.exists(logFileName)) {
+                    File file = SD.open(logFileName, FILE_WRITE);
+                    if (file) {
+                        file.println("timestamp,ssid,mac,vendor,rssi,type");
+                        file.close();
+                    }
+                }
+            }
+        }
+    }
+
+    // Force redraw if state changed
+    if (wasPresent != sdCardPresent) {
+        needsRedraw = true;
+        Serial.printf("SD Card state changed: %s\n", sdCardPresent ? "PRESENT" : "REMOVED");
+    }
 }
 
 void DisplayHandler::logDetection(const String& ssid, const String& mac, int8_t rssi, const String& type) {

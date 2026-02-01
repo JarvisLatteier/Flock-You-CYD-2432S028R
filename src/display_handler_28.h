@@ -117,6 +117,8 @@ private:
     // SD Card
     bool sdCardPresent;
     String logFileName;
+    uint32_t lastSdCheck;
+    void checkSDCard();
     uint32_t detectionsLogged;
 
     // Brightness control (PWM)
