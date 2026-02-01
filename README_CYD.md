@@ -1,6 +1,20 @@
-# Flock You - ESP32-2432S028R Edition
+# Flock You - ESP32-2432S028R (2.8" CYD) Edition
 
-This fork is specifically adapted for the **ESP32-2432S028R** "Cheap Yellow Display" - a 2.8" touchscreen ESP32 development board. It provides a complete touchscreen interface with RGB LED alerts, SD card logging, and touch calibration persistence.
+> **This fork is ONLY for the ESP32-2432S028R board (2.8" display, ILI9341, 320x240)**
+>
+> Do NOT use this with ESP32-2432S035 (3.5"), ESP32-3248S035, or other CYD variants.
+> Those boards have different display controllers, resolutions, and pin mappings.
+
+This is a purpose-built fork for the **ESP32-2432S028R** "Cheap Yellow Display" - the 2.8" version with an ILI9341 display controller. It provides a complete touchscreen interface with RGB LED alerts, SD card logging, and touch calibration persistence.
+
+## Supported Board
+
+**ESP32-2432S028R** - Look for these identifiers:
+- "2432S028" in the board name (NOT 2432S035 or 3248S035)
+- 2.8" display (NOT 3.5" or 4.3")
+- 320x240 resolution
+- ILI9341 display controller
+- Red PCB with USB connector on the short edge
 
 ## Hardware Specifications
 
