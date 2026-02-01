@@ -684,7 +684,7 @@ void DisplayHandler::drawSettingsPage() {
     tft.setTextSize(1);
     tft.setCursor(10, yPos + 5);
     tft.print("SD Card: ");
-    tft.print(sdCardPresent ? "READY" : "NOT FOUND");
+    tft.print(sdCardPresent ? "READY" : "NOT PRESENT");
 
     if (sdCardPresent) {
         tft.setTextColor(TEXT_DIM);
