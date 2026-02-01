@@ -28,6 +28,15 @@
 #include "display_handler_28.h"
 #endif
 
+#ifdef WAVESHARE_147
+#include "display_handler_147.h"
+#endif
+
+// Unified display macro for code that works with both display types
+#if defined(CYD_DISPLAY) || defined(WAVESHARE_147)
+#define HAS_DISPLAY 1
+#endif
+
 // ============================================================================
 // CONFIGURATION
 // ============================================================================
@@ -42,12 +51,15 @@
 #endif
 
 // RGB LED — active LOW on ESP32-2432S028R (PWM for brightness)
+// Waveshare 1.47" uses WS2812 addressable LED instead (handled by display handler)
+#ifndef WAVESHARE_147
 #define RGB_R  4
 #define RGB_G  16
 #define RGB_B  17
 #define LED_CH_R  0  // LEDC channel for red
 #define LED_CH_G  1  // LEDC channel for green
 #define LED_CH_B  2  // LEDC channel for blue
+#endif
 
 // LED States
 enum LedState {
@@ -181,6 +193,8 @@ void beep(int frequency, int duration_ms)
 
 // Set RGB LED using PWM (active LOW, so invert values)
 // Applies rgbBrightness scaling when display handler is available
+// Note: Waveshare 1.47" uses WS2812 LED handled by display handler
+#ifndef WAVESHARE_147
 static inline void rgb_pwm(uint8_t r, uint8_t g, uint8_t b) {
 #ifdef CYD_DISPLAY
     // Scale by RGB brightness setting (0-255)
@@ -210,6 +224,12 @@ void led_init(void) {
     ledcAttachPin(RGB_B, LED_CH_B);
     rgb_pwm(0, 0, 0);  // Start off
 }
+#else
+// Waveshare stub functions - LED handled by display handler
+static inline void rgb_pwm(uint8_t r, uint8_t g, uint8_t b) { (void)r; (void)g; (void)b; }
+static inline void rgb_set(bool r, bool g, bool b) { (void)r; (void)g; (void)b; }
+void led_init(void) { }
+#endif
 
 // Call on detection — triggers red flash state
 void led_flash_trigger(int8_t rssi) {
@@ -218,7 +238,11 @@ void led_flash_trigger(int8_t rssi) {
     led_detection_rssi = rssi;
     led_flash_on = true;
     led_last_toggle = millis();
+#ifdef WAVESHARE_147
+    display.setLEDDetection(rssi);
+#else
     rgb_pwm(255, 0, 0);  // Immediate red flash
+#endif
 }
 
 // Overload for backward compatibility
@@ -240,6 +264,22 @@ uint32_t get_flash_interval(int8_t rssi) {
 
 // Call every loop iteration — handles LED state machine
 void led_flash_update(void) {
+    uint32_t now = millis();
+
+#ifdef WAVESHARE_147
+    // Waveshare LED is handled by display handler's update() method
+    // Just track state transitions here
+    if (led_state == LED_DETECTED && now - led_detection_time >= 5000) {
+        led_state = LED_ALERT;
+        display.setLEDAlert();
+    }
+    if (led_state == LED_ALERT && now - led_detection_time >= LED_ALERT_TIMEOUT) {
+        led_state = LED_SCANNING;
+        display.setLEDScanning();
+    }
+    return;
+#endif
+
 #ifdef CYD_DISPLAY
     // Check if LED alerts are disabled
     if (!display.isLedAlertsEnabled()) {
@@ -247,8 +287,6 @@ void led_flash_update(void) {
         return;
     }
 #endif
-
-    uint32_t now = millis();
 
     switch (led_state) {
         case LED_SCANNING:
@@ -347,7 +385,7 @@ void output_wifi_detection_json(const char* ssid, const uint8_t* mac, int rssi, 
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     doc["mac_address"] = mac_str;
 
-#ifdef CYD_DISPLAY
+#ifdef HAS_DISPLAY
     // Add detection to display
     display.addDetection(String(ssid), String(mac_str), rssi, String(detection_type));
 #endif
@@ -399,7 +437,7 @@ void output_wifi_detection_json(const char* ssid, const uint8_t* mac, int rssi, 
 
 void output_ble_detection_json(const char* mac, const char* name, int rssi, const char* detection_method)
 {
-#ifdef CYD_DISPLAY
+#ifdef HAS_DISPLAY
     // Add BLE detection to display
     display.addDetection(name ? String(name) : "Unknown", String(mac), rssi, "BLE");
 #endif
@@ -638,7 +676,7 @@ void wifi_sniffer_packet_handler(void* buff, wifi_promiscuous_pkt_type_t type)
                (frame_type == 0x20) ? "PROBE" : "BEACON",
                ppkt->rx_ctrl.channel, total_frames_seen, total_ssids_seen);
 
-#ifdef CYD_DISPLAY
+#ifdef HAS_DISPLAY
         // Update display with last seen SSID
         display.showDebugSSID(String(ssid), ppkt->rx_ctrl.rssi, ppkt->rx_ctrl.channel);
 #endif
@@ -702,7 +740,7 @@ class AdvertisedDeviceCallbacks: public NimBLEAdvertisedDeviceCallbacks {
             name = advertisedDevice->getName();
         }
 
-#ifdef CYD_DISPLAY
+#ifdef HAS_DISPLAY
         // Show all BLE devices on display
         display.showDebugBLE(String(name.c_str()), String(addrStr.c_str()), rssi);
 #endif
@@ -760,7 +798,7 @@ void hop_channel()
         esp_wifi_set_channel(current_channel, WIFI_SECOND_CHAN_NONE);
         last_channel_hop = now;
         printf("[WiFi] Hopped to channel %d\n", current_channel);
-#ifdef CYD_DISPLAY
+#ifdef HAS_DISPLAY
         display.updateChannelInfo(current_channel);
 #endif
     }
@@ -775,12 +813,12 @@ void setup()
     Serial.begin(115200);
     delay(1000);
 
-#ifdef CYD_DISPLAY
+#ifdef HAS_DISPLAY
     // Initialize display first for visual feedback
     if (!display.begin()) {
         Serial.println("Failed to initialize display!");
     }
-    // Note: Don't show info here - display.begin() may have started calibration mode
+    // Note: Don't show info here - display.begin() may have started calibration mode (CYD only)
 #endif
 
     // Initialize buzzer
@@ -789,7 +827,8 @@ void setup()
     digitalWrite(BUZZER_PIN, LOW);
 #endif
 
-    // Initialize RGB LED with PWM
+#ifndef WAVESHARE_147
+    // Initialize RGB LED with PWM (Waveshare uses WS2812 via display handler)
     led_init();
 
     // LED boot test - cycle R, G, B to verify hardware
@@ -808,6 +847,7 @@ void setup()
     printf("LED boot test: Scanning mode (green 50%%)\n");
     rgb_pwm(0, 128, 0);   // Green 50%
     delay(400);
+#endif
 
     boot_beep_sequence();
     
@@ -837,11 +877,15 @@ void setup()
     printf("BLE scanner initialized\n");
     printf("System ready - hunting for Flock Safety devices...\n\n");
 
+#ifdef HAS_DISPLAY
+    // Only show system ready if not in calibration mode (CYD has touch calibration)
 #ifdef CYD_DISPLAY
-    // Only show system ready if not in calibration mode
     if (display.getCurrentPage() != DisplayHandler::PAGE_CALIBRATE) {
+#endif
         display.updateScanStatus(true);
+#ifdef CYD_DISPLAY
     }
+#endif
 #endif
 
     last_channel_hop = millis();
@@ -860,7 +904,7 @@ void loop()
         last_stats = millis();
     }
 
-#ifdef CYD_DISPLAY
+#ifdef HAS_DISPLAY
     // Update display
     display.update();
 #endif
