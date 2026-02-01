@@ -91,29 +91,44 @@ First boot triggers a guided 4-point calibration:
 
 Manual recalibration available via CAL button in footer.
 
-### SD Card Features
-- **Detection logging**: All detections logged to `/flockyou_detections.csv`
-- **Calibration persistence**: Touch calibration saved to `/touch_cal.txt`
-- **OUI vendor lookup**: Copy `oui.csv` to SD card root for MAC vendor identification
-- **Log format**: CSV with timestamp, SSID, MAC, vendor, RSSI, type
+### SD Card Setup
+
+**Format:** FAT32 (required)
+
+**Files to copy from this repo:**
+| File | Purpose | Required? |
+|------|---------|-----------|
+| `oui.csv` | MAC vendor lookup database (37K entries) | Optional but recommended |
+
+**Files created automatically:**
+| File | Purpose |
+|------|---------|
+| `touch_cal.txt` | Touch calibration data (4 values) |
+| `flockyou_detections.csv` | Detection log with timestamp, SSID, MAC, vendor, RSSI, type |
+
+**Quick setup:**
+1. Format SD card as FAT32
+2. Copy `oui.csv` from repo root to SD card root
+3. Insert SD card into CYD board
+4. First boot will prompt for touch calibration (saved to SD)
 
 ### OUI Vendor Lookup
-The system identifies device manufacturers from MAC addresses using a hybrid approach:
+The system identifies device manufacturers from MAC addresses:
 
-**Embedded lookup (instant):**
+**Embedded lookup (instant, no SD required):**
 - Flock Safety / surveillance device OUIs
-- Common camera manufacturers (Hikvision, Dahua, Amcrest)
-- Common IoT vendors (Apple, Espressif, Raspberry Pi)
+- Common cameras: Hikvision, Dahua, Amcrest
+- Common IoT: Apple, Espressif, Raspberry Pi
 
 **SD card lookup (comprehensive):**
-- Copy `oui.csv` from the repo to your SD card root
-- Contains 37,000+ IEEE OUI entries
-- Binary search for fast lookups (~10ms)
+- Requires `oui.csv` on SD card root
+- 37,000+ IEEE OUI entries
+- Binary search (~10ms per lookup)
 
-Vendor names display in:
-- Main page latest detection panel
-- Detection list (replaces MAC when vendor is known)
-- SD card log file
+**Where vendor names appear:**
+- Main page: Latest detection panel
+- List page: Replaces MAC when vendor is known
+- CSV log: Vendor column in detection records
 
 ## Installation
 
