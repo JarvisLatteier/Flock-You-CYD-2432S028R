@@ -1,3 +1,16 @@
+/**
+ * @file main.cpp
+ * @brief Flock You - Surveillance Camera Detection System
+ *
+ * Detects Flock Safety cameras and similar surveillance devices using
+ * WiFi promiscuous mode and BLE scanning. Outputs JSON over serial and
+ * provides visual alerts via RGB LED.
+ *
+ * Target: ESP32-2432S028R (2.8" CYD)
+ *
+ * @see https://github.com/JarvisLatteier/Flock-You-CYD-2432S028R
+ */
+
 #include <Arduino.h>
 #include <WiFi.h>
 #include <NimBLEDevice.h>

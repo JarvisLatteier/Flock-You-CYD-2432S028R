@@ -4,35 +4,36 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Flock You is a surveillance camera detection system that identifies Flock Safety cameras and similar surveillance devices using WiFi and Bluetooth scanning on ESP32 microcontrollers. It supports multiple hardware platforms including Xiao ESP32 S3/C3 and ESP32-2432S035C (CYD - Cheap Yellow Display).
+This is a fork of Flock You specifically adapted for the **ESP32-2432S028R** (2.8" CYD) board. It detects Flock Safety surveillance cameras and similar devices using WiFi and BLE scanning, with a full touchscreen interface.
+
+**Target Hardware:** ESP32-2432S028R only (2.8" ILI9341 320x240 display)
 
 ## Build and Run Commands
 
 ### ESP32 Firmware
 
 ```bash
-# Build for specific environment
-pio run -e xiao_esp32s3          # Xiao ESP32 S3 (primary target)
-pio run -e xiao_esp32c3          # Xiao ESP32 C3
-pio run -e esp32_cyd_35          # CYD 3.5" touchscreen display
+# Build with touchscreen UI
+pio run -e esp32_cyd_28
 
-# Flash firmware to device
-pio run -e xiao_esp32s3 --target upload
-pio run -e esp32_cyd_35 --target upload
+# Build headless (serial + RGB LED only)
+pio run -e esp32_cyd_28_headless
 
-# Monitor serial output
-pio device monitor
+# Flash firmware
+pio run -e esp32_cyd_28 -t upload
 
-# Test CYD display only
-pio run -e cyd_test --target upload
+# Monitor serial output (115200 baud)
+pio device monitor -e esp32_cyd_28
 ```
+
+**macOS Note:** Upload speed must be 115200 (configured in platformio.ini). Higher speeds fail on Apple Silicon.
 
 ### Web Dashboard
 
 ```bash
 cd api
 python3 -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+source venv/bin/activate
 pip install -r requirements.txt
 python flockyou.py
 ```
@@ -40,115 +41,97 @@ Access dashboard at `http://localhost:5000`
 
 ## Architecture
 
-### Core Components
+### Source Files
 
-1. **ESP32 Firmware (`src/main.cpp`)**: Main detection engine
-   - WiFi promiscuous mode captures probe requests (0x04) and beacon frames (0x08)
-   - Channel hopping across all 13 WiFi channels (2.4GHz) every 500ms
-   - BLE scanning with NimBLE (1 second scan duration, 5 second intervals)
-   - Pattern matching against crowdsourced surveillance device signatures
-   - JSON serial output at 115200 baud for detected devices
-   - Audio alert system with boot sequence, detection alerts, and heartbeat pulses
+| File | Purpose |
+|------|---------|
+| `src/main.cpp` | Detection engine, WiFi/BLE scanning, RGB LED state machine |
+| `src/display_handler_28.cpp` | Touchscreen UI for ESP32-2432S028R |
+| `src/display_handler_28.h` | Display handler class definition |
 
-2. **Display Handler (`src/display_handler.cpp/h`)**: CYD touchscreen interface (optional)
-   - TFT_eSPI-based UI for ILI9488/ILI9341 displays
-   - Real-time detection visualization
-   - Touch navigation between pages (MAIN, LIST, STATS, SET, CLR)
-   - Color-coded alerts and signal strength indicators
-   - Only compiled when `CYD_DISPLAY` build flag is set
+### Hardware Configuration
 
-3. **Web Dashboard (`api/flockyou.py`)**: Flask-based monitoring interface
-   - Real-time WebSocket updates from ESP32 serial connection
-   - GPS integration via NMEA-compatible USB dongles (GPGGA parsing)
-   - CSV/KML export functionality for geospatial analysis
-   - Detection history persistence with filtering capabilities
-   - API endpoints for detection management, GPS control, and data export
+**Display (VSPI):**
+- ILI9341 320x240, BGR color order
+- SPI: SCK=14, MOSI=13, MISO=12, CS=15, DC=2, RST=4
+- Dual backlight: GPIO 27 + 21 (both driven together via PWM)
 
-4. **Detection Datasets (`datasets/`)**: Real-world device signatures
-   - `FS+Ext+Battery_*.csv`: Flock Safety Extended Battery devices (1.1M records)
-   - `Penguin-*.csv`: Penguin surveillance devices (4.2M records)
-   - `Pigvision.csv`: Pigvision surveillance systems (47K records)
-   - `Flock-*.csv`: Standard Flock Safety cameras (174K records)
-   - `maximum_dots.csv`: Additional detection patterns (307K records)
-   - Sourced from deflock.me crowdsourced databases
+**Touch (Separate HSPI - critical!):**
+- XPT2046 on dedicated HSPI bus
+- CLK=25, MOSI=32, MISO=39, CS=33, IRQ=36
+- GPIO 36/39 are input-only, hence separate bus required
 
-### Hardware Platform Differences
+**RGB LED (Active LOW):**
+- R=GPIO4, G=GPIO16, B=GPIO17
+- PWM controlled via LEDC channels 0-2
+- States: scanning (green), detection (red flash), alert (orange)
 
-**Xiao ESP32 S3/C3 (default):**
-- Buzzer on GPIO3 (D2)
-- 8MB flash (S3) or 4MB flash (C3)
-- Huge app partitions for larger firmware
-- USB CDC on boot for serial communication
-- Primary target for wardriving/mobile use
+**SD Card:**
+- CS=GPIO5, shares VSPI with display
+- Stores `/touch_cal.txt` (calibration) and `/flockyou_detections.csv` (log)
 
-**ESP32-2432S035C (CYD):**
-- Buzzer on GPIO22 (optional external)
-- 480x320 ILI9488 or 320x240 ILI9341 TFT display
-- XPT2046 resistive touchscreen on GPIO33 (CS), GPIO36 (IRQ)
-- Display on SPI: MOSI=23, MISO=19, SCLK=18, CS=15, DC=2, RST=4, BL=21
-- 4MB flash with default partitions
-- Built-in visual interface (see `display_handler.cpp`)
+### Key Implementation Details
 
-### Detection Pattern Implementation
+**Touch Calibration:**
+- 4-point guided calibration (TL→TR→BL→BR)
+- Validates against known good ranges (200-4000, span >2000)
+- Persists to SD card, loads automatically on boot
+- RAW_Y maps to Screen X, RAW_X maps to Screen Y (axes swapped)
 
-Detection patterns are hardcoded in `src/main.cpp` based on dataset analysis:
+**LED State Machine:**
+- `LED_SCANNING`: Solid green at 50%
+- `LED_DETECTED`: Red flashing, rate based on RSSI (50-400ms interval)
+- `LED_ALERT`: Solid orange, transitions back to scanning after 15s timeout
 
-**SSID Patterns** (case-insensitive substring match):
-- `flock`, `Flock`, `FLOCK`
-- `FS Ext Battery`
-- `Penguin`
-- `Pigvision`
+**Display Pages:**
+- PAGE_MAIN: Stats row, latest detection panel, LED key
+- PAGE_LIST: Scrollable detection history with color-coded indicators
+- PAGE_STATS: Detection counts, percentages, distribution bars, CLEAR button
+- PAGE_SETTINGS: Brightness controls, LED toggle, SD status
+- PAGE_CALIBRATE: 4-point touch calibration with CANCEL/SAVE buttons
 
-**MAC Prefixes** (first 3 octets):
+### Detection Patterns
+
+**SSID Patterns** (case-insensitive):
+- `flock`, `fs ext battery`, `penguin`, `pigvision`
+
+**MAC Prefixes:**
 - FS Ext Battery: `58:8e:81`, `cc:cc:cc`, `ec:1b:bd`, `90:35:ea`, etc.
 - Flock WiFi: `70:c9:4e`, `3c:91:80`, `d8:f3:bc`, `80:30:49`, etc.
-- Note: Penguin devices use locally administered OUIs (commented out in code)
 
-**BLE Device Names**:
-- `FS Ext Battery`, `Penguin`, `Flock`, `Pigvision`
+**BLE Device Names:**
+- `fs ext battery`, `penguin`, `flock`, `pigvision`
 
-### Key Libraries
+### Libraries
 
-- **Firmware**:
-  - NimBLE-Arduino@^1.4.0 (BLE scanning)
-  - ArduinoJson@^6.21.0 (JSON serialization)
-  - TFT_eSPI@^2.5.43 (display, CYD only)
-  - XPT2046_Touchscreen (touch, CYD only)
-- **Web**:
-  - Flask, Flask-SocketIO (web server, WebSocket)
-  - pyserial (ESP32 serial communication)
-  - pynmea2 (GPS NMEA parsing)
+- **NimBLE-Arduino@^1.4.0** - BLE scanning
+- **ArduinoJson@^6.21.0** - JSON serialization
+- **TFT_eSPI@^2.5.43** - Display driver (configured via build flags)
 
 ## Development Notes
 
-### Build System
-- Uses PlatformIO with multiple environments in `platformio.ini`
-- Build flags configure display drivers and pin mappings
-- TFT_eSPI configured entirely via build flags (no User_Setup.h needed)
+### Adding New Detection Patterns
+Edit arrays in `src/main.cpp`:
+- `wifi_ssid_patterns[]` - SSID substring matches
+- `mac_prefixes[]` - First 3 octets of MAC address
+- `device_name_patterns[]` - BLE advertised names
 
-### WiFi Promiscuous Mode
-- Callback function: `wifi_promiscuous_rx_cb()`
-- Filters for management frames (type 0x0, subtype 0x04 probe requests or 0x08 beacons)
-- Channel hopping prevents missing devices on different channels
-- RSSI values extracted from packet metadata
+### Modifying UI Layout
+Edit `src/display_handler_28.cpp`:
+- `drawMainPage()` - Home screen layout
+- `drawListPage()` - Detection list
+- `drawStatsPage()` - Statistics view
+- `drawSettingsPage()` - Configuration options
+- `drawCalibrationPage()` - Touch calibration UI
 
-### BLE Scanning
-- NimBLE stack runs independently of WiFi scanning
-- Active scan mode with 100ms intervals
-- Advertisement callbacks process device names and MAC addresses
-- Scan duration of 1 second every 5 seconds to balance battery life
+### Touch Zone Registration
+Touch zones are cleared each redraw cycle. Add zones in page draw functions:
+```cpp
+addTouchZone(x1, y1, x2, y2, callbackFunction, "label");
+```
 
-### Audio Alert System
-- Boot sequence: 200Hz → 800Hz (300ms each)
-- Detection alert: 1000Hz × 3 beeps (150ms each, 50ms gaps)
-- Heartbeat pulse: 600Hz × 2 beeps every 10 seconds while device in range
-- Uses Arduino `tone()` function for PWM audio generation
-
-### Serial Output Format
-- JSON objects, one per line
-- Fields: `timestamp`, `detection_time`, `protocol` (wifi/ble), `detection_method`, `ssid`, `mac_address`, `rssi`, `signal_strength`, `channel`
-- Extended fields: `alert_level`, `device_category`, `threat_score`, `matched_patterns`, `device_info`
-
-## Detection Datasets
-
-The `datasets/` directory contains crowdsourced surveillance device signatures from deflock.me with real-world MAC addresses, SSIDs, and GPS coordinates. These CSV files inform the hardcoded detection patterns in `src/main.cpp`. To update detection patterns, analyze these datasets for new MAC prefixes or SSID patterns and add them to the firmware code.
+### Serial Output
+JSON objects at 115200 baud, one per line. Key fields:
+- `protocol`: "wifi" or "bluetooth_le"
+- `detection_method`: "probe_request", "beacon", "mac_prefix", "device_name"
+- `ssid`, `mac_address`, `rssi`, `channel`, `threat_score`

@@ -1,3 +1,13 @@
+/**
+ * @file display_handler_28.cpp
+ * @brief Touchscreen UI implementation for ESP32-2432S028R
+ *
+ * Implements the DisplayHandler class for the 2.8" CYD board with ILI9341
+ * display and XPT2046 touch controller.
+ *
+ * @see display_handler_28.h for class definition and hardware notes
+ */
+
 #ifdef CYD_DISPLAY
 
 #include "display_handler_28.h"
@@ -91,7 +101,7 @@ bool DisplayHandler::begin() {
     tft.setTextSize(1);
     tft.setTextColor(TEXT_DIM);
     tft.setCursor(100, 160);
-    tft.print("v2.0 - CYD Edition");
+    tft.print("v1.0.0");
 
     // Animated loading dots
     tft.setTextColor(SUCCESS_COLOR);
@@ -687,7 +697,7 @@ void DisplayHandler::drawAboutPage() {
     tft.setTextSize(1);
     tft.setTextColor(INFO_COLOR, BG_COLOR);
     tft.setCursor(70, yPos);
-    tft.print("CYD 2.8\" Edition v1.0");
+    tft.print("ESP32-2432S028R v1.0.0");
     yPos += 20;
 
     tft.setTextColor(TEXT_COLOR, BG_COLOR);

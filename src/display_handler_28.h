@@ -1,3 +1,16 @@
+/**
+ * @file display_handler_28.h
+ * @brief Touchscreen UI for ESP32-2432S028R (2.8" ILI9341 320x240)
+ *
+ * Provides 5-page navigation (HOME, LIST, STAT, CONF, CAL), touch calibration
+ * with SD card persistence, and brightness controls.
+ *
+ * Hardware notes:
+ * - Display on VSPI (SCK=14, MOSI=13, MISO=12, CS=15)
+ * - Touch on separate HSPI (CLK=25, MOSI=32, MISO=39, CS=33, IRQ=36)
+ * - Dual backlight PWM (GPIO 27 + 21)
+ */
+
 #ifndef DISPLAY_HANDLER_28_H
 #define DISPLAY_HANDLER_28_H
 
