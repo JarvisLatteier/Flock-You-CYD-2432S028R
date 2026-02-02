@@ -49,26 +49,38 @@ bool DisplayHandler::begin() {
     Serial.println("Waveshare 1.47\" Display initializing...");
 
     // Initialize TFT
+    Serial.println("  TFT init...");
     tft.init();
     tft.setRotation(0);  // Portrait mode
     tft.fillScreen(BG_COLOR);
+    Serial.println("  TFT done");
 
     // Setup backlight
+    Serial.println("  Backlight init...");
     setupBacklightPWM();
+    Serial.println("  Backlight done");
 
     // Initialize FastLED for WS2812
-    FastLED.addLeds<WS2812, RGB_LED_PIN, GRB>(leds, NUM_LEDS);
+    Serial.println("  FastLED init...");
+    Serial.flush();
+    delay(10);
+    FastLED.addLeds<WS2812B, RGB_LED_PIN, GRB>(leds, NUM_LEDS);
     FastLED.setBrightness(50);
     leds[0] = CRGB::Black;
     FastLED.show();
+    Serial.println("  FastLED done");
 
     // Initialize SD Card (SDMMC)
+    Serial.println("  SD init...");
     initSDCard();
+    Serial.println("  SD done");
 
     // Show boot animation
+    Serial.println("  Boot animation...");
     showBootAnimation();
 
     needsRedraw = true;
+    Serial.println("Display ready!");
     return true;
 }
 
