@@ -40,6 +40,7 @@
 #define TOUCH_RAW_X_MIN_DEFAULT 604
 #define TOUCH_RAW_X_MAX_DEFAULT 3571
 #define TOUCH_CAL_FILE "/touch_cal.txt"
+#define SETTINGS_FILE "/settings.txt"
 #define OUI_FILE "/oui.csv"
 
 // Modern dark theme color scheme (RGB565)
@@ -156,6 +157,8 @@ private:
     void startCalibration();
     void processCalibrationTouch(uint16_t rawX, uint16_t rawY);
     bool validateAndApplyCalibration();
+    bool loadSettings();
+    bool saveSettings();
 
     // Private methods
     void drawHeader();

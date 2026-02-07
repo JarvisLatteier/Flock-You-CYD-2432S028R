@@ -88,6 +88,11 @@ bool DisplayHandler::begin() {
     // Initialize SD Card
     sdCardPresent = initSDCard();
 
+    // Load saved settings from SD card
+    if (sdCardPresent) {
+        loadSettings();
+    }
+
     // Initialize LDR for auto brightness
     pinMode(LDR_PIN, INPUT);
 
@@ -1597,6 +1602,7 @@ void DisplayHandler::applyBrightness() {
 void DisplayHandler::setBrightness(uint8_t level) {
     brightness = level;
     applyBrightness();
+    saveSettings();
     needsRedraw = true;
 }
 
@@ -1607,6 +1613,7 @@ void DisplayHandler::increaseBrightness() {
         brightness = 255;
     }
     applyBrightness();
+    saveSettings();
     needsRedraw = true;
 }
 
@@ -1618,6 +1625,7 @@ void DisplayHandler::decreaseBrightness() {
     }
     autoBrightness = false;  // Manual adjustment disables auto
     applyBrightness();
+    saveSettings();
     needsRedraw = true;
 }
 
@@ -1626,6 +1634,7 @@ void DisplayHandler::toggleAutoBrightness() {
     if (autoBrightness) {
         updateAutoBrightness();  // Apply immediately
     }
+    saveSettings();
     needsRedraw = true;
 }
 
@@ -1658,6 +1667,7 @@ void DisplayHandler::updateAutoBrightness() {
 // === RGB Brightness Control ===
 void DisplayHandler::setRgbBrightness(uint8_t level) {
     rgbBrightness = level;
+    saveSettings();
     needsRedraw = true;
 }
 
@@ -1667,6 +1677,7 @@ void DisplayHandler::increaseRgbBrightness() {
     } else {
         rgbBrightness = 255;
     }
+    saveSettings();
     needsRedraw = true;
 }
 
@@ -1676,11 +1687,13 @@ void DisplayHandler::decreaseRgbBrightness() {
     } else {
         rgbBrightness = 25;  // Minimum 10%
     }
+    saveSettings();
     needsRedraw = true;
 }
 
 void DisplayHandler::toggleLedAlerts() {
     ledAlertsEnabled = !ledAlertsEnabled;
+    saveSettings();
     needsRedraw = true;
 }
 
@@ -1846,6 +1859,68 @@ bool DisplayHandler::saveCalibration() {
     return true;
 }
 
+bool DisplayHandler::loadSettings() {
+    if (!sdCardPresent) return false;
+    if (!SD.exists(SETTINGS_FILE)) return false;
+
+    File file = SD.open(SETTINGS_FILE, FILE_READ);
+    if (!file) return false;
+
+    // Read settings (one per line): brightness, autoBrightness, soundEnabled, soundVolume, ledAlertsEnabled, rgbBrightness
+    String line;
+    int idx = 0;
+    int values[6] = {255, 0, 1, 128, 1, 128};  // Defaults
+
+    while (file.available() && idx < 6) {
+        line = file.readStringUntil('\n');
+        line.trim();
+        if (line.length() > 0) {
+            values[idx++] = line.toInt();
+        }
+    }
+    file.close();
+
+    if (idx >= 6) {
+        brightness = constrain(values[0], 25, 255);
+        autoBrightness = values[1] != 0;
+        soundEnabled = values[2] != 0;
+        soundVolume = constrain(values[3], 0, 255);
+        ledAlertsEnabled = values[4] != 0;
+        rgbBrightness = constrain(values[5], 0, 255);
+        applyBrightness();
+        Serial.printf("Settings loaded: bright=%d auto=%d snd=%d vol=%d led=%d rgb=%d\n",
+            brightness, autoBrightness, soundEnabled, soundVolume, ledAlertsEnabled, rgbBrightness);
+        return true;
+    }
+    return false;
+}
+
+bool DisplayHandler::saveSettings() {
+    if (!sdCardPresent) {
+        Serial.println("Cannot save settings: no SD card");
+        return false;
+    }
+
+    File file = SD.open(SETTINGS_FILE, FILE_WRITE);
+    if (!file) {
+        Serial.println("Cannot save settings: file open failed");
+        return false;
+    }
+
+    // Write settings (one per line)
+    file.println(brightness);
+    file.println(autoBrightness ? 1 : 0);
+    file.println(soundEnabled ? 1 : 0);
+    file.println(soundVolume);
+    file.println(ledAlertsEnabled ? 1 : 0);
+    file.println(rgbBrightness);
+    file.close();
+
+    Serial.printf("Settings saved: bright=%d auto=%d snd=%d vol=%d led=%d rgb=%d\n",
+        brightness, autoBrightness, soundEnabled, soundVolume, ledAlertsEnabled, rgbBrightness);
+    return true;
+}
+
 void DisplayHandler::updateChannelInfo(uint8_t channel) {
     currentChannel = channel;
     bleScanning = false;  // Channel updates mean WiFi scanning
@@ -1917,11 +1992,13 @@ void DisplayHandler::toggleSound() {
     if (soundEnabled) {
         playTone(1000, 50);  // Quick beep to confirm
     }
+    saveSettings();
     needsRedraw = true;
 }
 
 void DisplayHandler::setSoundVolume(uint8_t level) {
     soundVolume = level;
+    saveSettings();
     needsRedraw = true;
 }
 
@@ -1934,6 +2011,7 @@ void DisplayHandler::increaseSoundVolume() {
     if (soundEnabled) {
         playTone(1000, 30);  // Quick feedback beep
     }
+    saveSettings();
     needsRedraw = true;
 }
 
@@ -1946,6 +2024,7 @@ void DisplayHandler::decreaseSoundVolume() {
     if (soundEnabled) {
         playTone(800, 30);  // Quick feedback beep
     }
+    saveSettings();
     needsRedraw = true;
 }
 

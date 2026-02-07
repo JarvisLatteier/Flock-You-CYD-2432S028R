@@ -113,6 +113,7 @@ Manual recalibration available via CALIBRATE button on CONFIG page.
 | File | Purpose |
 |------|---------|
 | `touch_cal.txt` | Touch calibration data (4 values) |
+| `settings.txt` | Persistent settings (brightness, sound, LED) |
 | `flockyou_detections.csv` | Detection log with timestamp, SSID, MAC, vendor, RSSI, type |
 
 **Quick setup:**
@@ -201,6 +202,8 @@ Touch the footer buttons to navigate:
 - **RGB LED**: ON/OFF toggle, brightness +/-/MAX buttons
 - **SD Card status**: Shows SD, calibration file, OUI file, and log count
 - **CALIBRATE button**: Launch touch calibration
+
+All settings are automatically saved to SD card and restored on boot.
 
 ### Understanding Detections
 
