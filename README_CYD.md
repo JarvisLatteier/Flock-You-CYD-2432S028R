@@ -57,18 +57,26 @@ The XPT2046 touch controller is on a **separate HSPI bus** - this is critical an
 - CS: GPIO 5
 - Shares VSPI bus with display
 
+**Speaker (SPEAK P4 Connector):**
+- GPIO 26: Speaker output (PWM via LEDC channel 5)
+
 **Available for Extensions:**
 - GPIO 22: Buzzer output (active HIGH)
 
 ## Features
 
 ### Touchscreen Interface
-- **5-page navigation**: HOME, LIST, STAT, CONF, CAL
-- **Main dashboard**: Real-time detection stats, latest detection panel, LED status key
-- **Detection list**: Scrollable list with color-coded threat indicators
+- **4-button navigation**: HOME, LIST, STATS, CONFIG
+- **Main dashboard**: Real-time detection stats, channel/BLE indicator, latest detection panel
+- **Detection list**: Scrollable list with color-coded threat indicators and signal strength
 - **Statistics page**: Detection counts, percentages, distribution bars, CLEAR button
-- **Settings page**: Display brightness, RGB LED brightness, auto-brightness toggle, LED alert toggle, SD card status
-- **Calibration page**: 4-point guided touch calibration with validation
+- **Config page**: Display/Sound/LED brightness controls with +/-/MAX buttons, SD card status, CALIBRATE button
+- **Calibration page**: Full-screen 4-point guided touch calibration with validation
+
+### Speaker/Sound Support
+- Boot tone on startup (3-note ascending sequence)
+- Sound toggle and volume control (0-100%)
+- Speaker connected to GPIO 26 (SPEAK P4 connector)
 
 ### RGB LED Alert System
 The RGB LED provides visual status at a glance:
@@ -83,13 +91,14 @@ Flash rate scales with RSSI: stronger signals flash faster (50ms interval) while
 
 ### Touch Calibration System
 First boot triggers a guided 4-point calibration:
-1. Tap targets at each corner (TL → TR → BL → BR)
-2. System validates against known good ranges (200-4000, span >2000)
-3. Invalid calibrations are rejected with restart prompt
-4. Valid calibrations save to `/touch_cal.txt` on SD card
-5. Subsequent boots load calibration automatically
+1. Full-screen calibration with crosshair targets at each corner
+2. Tap targets in order: TL → TR → BL → BR
+3. System validates against known good ranges (200-4000, span >2000)
+4. Invalid calibrations are rejected with restart prompt
+5. Valid calibrations save to `/touch_cal.txt` on SD card
+6. Subsequent boots load calibration automatically
 
-Manual recalibration available via CAL button in footer.
+Manual recalibration available via CALIBRATE button on CONFIG page.
 
 ### SD Card Setup
 
@@ -180,17 +189,18 @@ This excludes all display code but retains RGB LED alerts and serial JSON output
 
 ### Navigation
 Touch the footer buttons to navigate:
-- **HOME**: Main dashboard with stats and latest detection
-- **LIST**: Scrollable detection history
-- **STAT**: Statistics and CLEAR button
-- **CONF**: Brightness controls, LED toggle, SD status
-- **CAL**: Recalibrate touchscreen
+- **HOME**: Main dashboard with channel/BLE indicator and latest detection
+- **LIST**: Scrollable detection history with signal strength bars
+- **STATS**: Detection statistics and CLEAR button
+- **CONFIG**: Brightness/Sound/LED controls, SD status, CALIBRATE button
 
-### Settings
-- **Display brightness**: +/- buttons (10% increments, 10-100%)
-- **Auto brightness**: Toggle to use LDR sensor (GPIO 34)
-- **RGB LED brightness**: +/- buttons for alert LED intensity
-- **LED alerts**: Toggle RGB LED on/off
+### Config Page Settings
+- **Display brightness**: AUTO/MAN toggle, +/-/MAX buttons (10% increments)
+- **Auto brightness**: Uses LDR sensor on GPIO 34
+- **Sound**: ON/OFF toggle, volume +/-/MAX buttons
+- **RGB LED**: ON/OFF toggle, brightness +/-/MAX buttons
+- **SD Card status**: Shows SD, calibration file, OUI file, and log count
+- **CALIBRATE button**: Launch touch calibration
 
 ### Understanding Detections
 
@@ -224,6 +234,7 @@ Touch the footer buttons to navigate:
 | 21 | TFT Backlight 2 | PWM, paired with GPIO 27 |
 | 22 | Buzzer | Optional, active HIGH |
 | 25 | Touch CLK | HSPI |
+| 26 | Speaker | PWM via LEDC channel 5 |
 | 27 | TFT Backlight 1 | PWM |
 | 32 | Touch MOSI | HSPI |
 | 33 | Touch CS | |

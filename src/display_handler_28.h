@@ -29,6 +29,10 @@
 // LDR (Light Dependent Resistor) for auto brightness
 #define LDR_PIN 34
 
+// Speaker (SPEAK P4 connector)
+#define SPEAKER_PIN 26
+#define SPEAKER_CHANNEL 5  // LEDC channel for speaker PWM
+
 // Touch calibration defaults (can be overridden by SD card)
 // RAW_Y maps to Screen X, RAW_X maps to Screen Y
 #define TOUCH_RAW_Y_MIN_DEFAULT 407
@@ -39,28 +43,34 @@
 #define OUI_FILE "/oui.csv"
 
 // Modern dark theme color scheme (RGB565)
-#define BG_COLOR      0x0841          // Deep charcoal (#080808 -> darker feel)
-#define BG_DARK       0x0000          // Pure black for contrast areas
-#define TEXT_COLOR    0xFFFF          // White text
-#define TEXT_DIM      0x8410          // Dimmed gray text
-#define WIFI_COLOR    0x04FF          // Bright blue for WiFi
-#define BLE_COLOR     0x781F          // Purple for BLE
-#define ALERT_COLOR   0xF800          // Red for Flock alerts
-#define ALERT_WARN    0xFD20          // Orange for warnings
-#define SUCCESS_COLOR 0x07E0          // Green for success/scanning
-#define HEADER_COLOR  0x10A2          // Dark blue-gray header
-#define FOOTER_COLOR  0x0861          // Slightly lighter footer
-#define ACCENT_COLOR  0x04FF          // Blue accent
-#define BUTTON_ACTIVE 0x2945          // Active button background
+#define BG_COLOR       0x0000          // Pure black background
+#define BG_DARK        0x0000          // Pure black for contrast areas
+#define PANEL_COLOR    0x2945          // Dark gray panels (#2a2a2a)
+#define TEXT_COLOR     0xFFFF          // White text
+#define TEXT_DIM       0x8410          // Dimmed gray text
+#define WIFI_COLOR     0x04FF          // Bright blue for WiFi
+#define BLE_COLOR      0x781F          // Purple for BLE
+#define ALERT_COLOR    0xF800          // Red for Flock alerts/threats
+#define ALERT_WARN     0xFD20          // Orange for warnings
+#define SUCCESS_COLOR  0x2665          // Dark green (#1ECF25) for scanning
+#define HEADER_COLOR   0x5ACB          // Anchor Gray header (#58595B)
+#define FOOTER_COLOR   0x0000          // Black footer
+#define LOGO_COLOR     0xFD20          // Orange logo text (#FF8C00)
+#define ACCENT_COLOR   0x04FF          // Blue accent
+#define SLIDER_COLOR   0x04BF          // Blue slider track
+#define BUTTON_ACTIVE  0x6B6D          // Active button (same as header)
+#define BUTTON_BORDER  0xFFFF          // White button border
 
 // Legacy color aliases
 #define INFO_COLOR    ACCENT_COLOR
 #define WARNING_COLOR ALERT_WARN
 
-// Display zones (adjusted for 320x240)
-#define HEADER_HEIGHT 36
-#define FOOTER_HEIGHT 32
-#define LIST_ITEM_HEIGHT 24
+// Display zones (adjusted for 320x240 with new layout)
+#define HEADER_HEIGHT     55           // Logo header area
+#define STATUS_BAR_HEIGHT 20           // Page status bar
+#define FOOTER_HEIGHT     33           // Nav buttons
+#define LED_STATUS_HEIGHT 22           // LED indicator row
+#define LIST_ITEM_HEIGHT  24
 
 // Touch zones
 struct TouchZone {
@@ -130,6 +140,13 @@ private:
     void applyBrightness();
     void updateAutoBrightness();
 
+    // Sound control
+    bool soundEnabled;
+    uint8_t soundVolume;  // 0-255
+    void setupSpeaker();
+    void playTone(uint16_t frequency, uint16_t duration);
+    void playBootTone();
+
     // Touch calibration (runtime values, can be loaded from SD)
     uint16_t touchRawYMin, touchRawYMax;
     uint16_t touchRawXMin, touchRawXMax;
@@ -142,14 +159,16 @@ private:
 
     // Private methods
     void drawHeader();
+    void drawStatusBar();
     void drawFooter();
-    void clearContentArea();
+    void drawLedStatusRow();
     void drawMainPage();
     void drawListPage();
     void drawStatsPage();
     void drawSettingsPage();
-    void drawAboutPage();
     void drawCalibrationPage();
+
+    // UI widget helpers
     void handleCalibrationTouch();
     void drawProgressBar(uint16_t x, uint16_t y, uint16_t w, uint16_t h, float progress, uint16_t color);
     void drawSignalStrength(uint16_t x, uint16_t y, int8_t rssi);
@@ -163,7 +182,6 @@ public:
         PAGE_LIST,
         PAGE_STATS,
         PAGE_SETTINGS,
-        PAGE_ABOUT,
         PAGE_CALIBRATE
     };
 
@@ -183,6 +201,14 @@ public:
     uint8_t getRgbBrightness() { return rgbBrightness; }
     void toggleLedAlerts();
     bool isLedAlertsEnabled() { return ledAlertsEnabled; }
+
+    // Sound control
+    void toggleSound();
+    bool isSoundEnabled() { return soundEnabled; }
+    void setSoundVolume(uint8_t level);
+    void increaseSoundVolume();
+    void decreaseSoundVolume();
+    uint8_t getSoundVolume() { return soundVolume; }
 
     // SD Card
     bool initSDCard();
@@ -228,9 +254,15 @@ void onBrightnessDown();
 void onAutoBrightnessToggle();
 void onRgbBrightnessUp();
 void onRgbBrightnessDown();
+void onBrightnessMax();
+void onSoundVolumeMax();
+void onRgbBrightnessMax();
 void onCalibratePress();
 void onCalibrateSave();
 void onLedAlertToggle();
+void onSoundToggle();
+void onSoundVolumeUp();
+void onSoundVolumeDown();
 
 #endif // CYD_DISPLAY
 #endif // DISPLAY_HANDLER_28_H

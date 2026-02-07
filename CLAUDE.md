@@ -70,6 +70,10 @@ Access dashboard at `http://localhost:5000`
 - CS=GPIO5, shares VSPI with display
 - Stores `/touch_cal.txt` (calibration) and `/flockyou_detections.csv` (log)
 
+**Speaker (SPEAK P4 Connector):**
+- GPIO 26, PWM via LEDC channel 5
+- Boot tone and UI feedback sounds
+
 ### Key Implementation Details
 
 **Touch Calibration:**
@@ -83,12 +87,12 @@ Access dashboard at `http://localhost:5000`
 - `LED_DETECTED`: Red flashing, rate based on RSSI (50-400ms interval)
 - `LED_ALERT`: Solid orange, transitions back to scanning after 15s timeout
 
-**Display Pages:**
-- PAGE_MAIN: Stats row, latest detection panel, LED key
-- PAGE_LIST: Scrollable detection history with color-coded indicators
+**Display Pages (4-button nav: HOME, LIST, STATS, CONFIG):**
+- PAGE_MAIN: Header with CH/BLE indicator, latest detection panel, LED status row
+- PAGE_LIST: Scrollable detection history with color-coded indicators and signal bars
 - PAGE_STATS: Detection counts, percentages, distribution bars, CLEAR button
-- PAGE_SETTINGS: Brightness controls, LED toggle, SD status
-- PAGE_CALIBRATE: 4-point touch calibration with CANCEL/SAVE buttons
+- PAGE_SETTINGS: Custom layout (no header), SD status, Display/Sound/LED controls with +/-/MAX, CALIBRATE button
+- PAGE_CALIBRATE: Full-screen 4-point calibration with CANCEL/SAVE buttons
 
 ### Detection Patterns
 

@@ -27,6 +27,9 @@ void onBrightnessDown() { display.decreaseBrightness(); }
 void onAutoBrightnessToggle() { display.toggleAutoBrightness(); }
 void onRgbBrightnessUp() { display.increaseRgbBrightness(); }
 void onRgbBrightnessDown() { display.decreaseRgbBrightness(); }
+void onBrightnessMax() { display.setBrightness(255); }
+void onSoundVolumeMax() { display.setSoundVolume(255); }
+void onRgbBrightnessMax() { display.setRgbBrightness(255); }
 void onCalibratePress() { display.setPage(DisplayHandler::PAGE_CALIBRATE); }
 void onCalibrateSave() {
     if (display.saveCalibration()) {
@@ -34,6 +37,9 @@ void onCalibrateSave() {
     }
 }
 void onLedAlertToggle() { display.toggleLedAlerts(); }
+void onSoundToggle() { display.toggleSound(); }
+void onSoundVolumeUp() { display.increaseSoundVolume(); }
+void onSoundVolumeDown() { display.decreaseSoundVolume(); }
 
 DisplayHandler::DisplayHandler() : tft(), touchSPI(HSPI) {
     needsRedraw = true;
@@ -54,6 +60,8 @@ DisplayHandler::DisplayHandler() : tft(), touchSPI(HSPI) {
     rgbBrightness = 128;  // 50% default
     lastLdrRead = 0;
     ledAlertsEnabled = true;  // LED alerts on by default
+    soundEnabled = true;      // Sound on by default
+    soundVolume = 128;        // 50% default
     // Touch calibration defaults
     touchRawYMin = TOUCH_RAW_Y_MIN_DEFAULT;
     touchRawYMax = TOUCH_RAW_Y_MAX_DEFAULT;
@@ -83,172 +91,115 @@ bool DisplayHandler::begin() {
     // Initialize LDR for auto brightness
     pinMode(LDR_PIN, INPUT);
 
-    // === ANIMATED BOOT SCREEN ===
-    tft.fillScreen(TFT_BLACK);
+    // Initialize speaker
+    setupSpeaker();
 
-    // Scan lines effect (top to bottom) - slower
-    for (int y = 0; y < 240; y += 3) {
-        tft.drawFastHLine(0, y, 320, 0x0841);
-        delay(10);
-    }
+    // Play boot tone
+    playBootTone();
 
-    delay(200);
+    // === STREAMLINED BOOT SCREEN ===
+    tft.fillScreen(BG_COLOR);
 
-    // Title typing effect - larger, centered
+    // Draw header-style splash area (gray bar at top like the main UI)
+    tft.fillRect(0, 0, 320, 70, HEADER_COLOR);
+    tft.drawFastHLine(0, 69, 320, TEXT_COLOR);
+
+    // "FLOCK YOU" title with glitch-in effect
     tft.setTextSize(4);
-    tft.setTextColor(ALERT_COLOR);
     const char* title = "FLOCK YOU";
-    int titleX = 28;
-    int titleY = 20;
-    for (int i = 0; title[i]; i++) {
-        tft.setCursor(titleX + i * 24, titleY);
-        tft.print(title[i]);
-        delay(120);
+    int titleX = 16;  // Centered for size 4: (320 - 9*24) / 2 = 28, adjusted
+    int titleY = 18;
+
+    // Quick glitch effect
+    for (int g = 0; g < 3; g++) {
+        tft.setTextColor(g % 2 ? LOGO_COLOR : ALERT_COLOR);
+        tft.setCursor(titleX + (g % 2 ? 2 : -2), titleY);
+        tft.print(title);
+        delay(60);
+        tft.fillRect(10, 10, 300, 50, HEADER_COLOR);
     }
 
-    delay(200);
-
-    // Glitch effect on title - slower
-    for (int g = 0; g < 4; g++) {
-        tft.setTextColor(TFT_BLACK);
-        tft.setCursor(titleX, titleY);
-        tft.print("FLOCK YOU");
-        delay(80);
-        tft.setTextColor(g % 2 ? ALERT_COLOR : ACCENT_COLOR);
-        tft.setCursor(titleX + (g % 2 ? 3 : -3), titleY);
-        tft.print("FLOCK YOU");
-        delay(80);
-    }
-    tft.fillRect(20, 15, 280, 40, TFT_BLACK);
-    tft.setTextColor(TEXT_COLOR);
+    // Final title
+    tft.setTextColor(LOGO_COLOR);
     tft.setCursor(titleX, titleY);
-    tft.print("FLOCK YOU");
+    tft.print(title);
+
+    delay(150);
+
+    // Tagline (matching new header style)
+    tft.setTextSize(1);
+    tft.setTextColor(LOGO_COLOR);
+    tft.setCursor(97, 55);
+    tft.print("Surveillance Detector");
 
     delay(300);
 
-    // Subtitle - larger
-    tft.setTextSize(2);
-    tft.setTextColor(ACCENT_COLOR);
-    tft.setCursor(18, 60);
-    tft.print("SURVEILLANCE DETECTOR");
-
-    delay(400);
-
-    // Animated radar sweep - larger, centered lower
-    int centerX = 160, centerY = 140, radius = 65;
-
-    // Draw radar grid
-    tft.drawCircle(centerX, centerY, radius, 0x2945);
-    tft.drawCircle(centerX, centerY, radius * 2 / 3, 0x2104);
-    tft.drawCircle(centerX, centerY, radius / 3, 0x2104);
-    tft.drawFastHLine(centerX - radius, centerY, radius * 2, 0x2945);
-    tft.drawFastVLine(centerX, centerY - radius, radius * 2, 0x2945);
-
-    // Corner markers
-    tft.drawLine(centerX - radius + 5, centerY - radius + 5, centerX - radius + 15, centerY - radius + 5, ACCENT_COLOR);
-    tft.drawLine(centerX - radius + 5, centerY - radius + 5, centerX - radius + 5, centerY - radius + 15, ACCENT_COLOR);
-    tft.drawLine(centerX + radius - 5, centerY - radius + 5, centerX + radius - 15, centerY - radius + 5, ACCENT_COLOR);
-    tft.drawLine(centerX + radius - 5, centerY - radius + 5, centerX + radius - 5, centerY - radius + 15, ACCENT_COLOR);
-    tft.drawLine(centerX - radius + 5, centerY + radius - 5, centerX - radius + 15, centerY + radius - 5, ACCENT_COLOR);
-    tft.drawLine(centerX - radius + 5, centerY + radius - 5, centerX - radius + 5, centerY + radius - 15, ACCENT_COLOR);
-    tft.drawLine(centerX + radius - 5, centerY + radius - 5, centerX + radius - 15, centerY + radius - 5, ACCENT_COLOR);
-    tft.drawLine(centerX + radius - 5, centerY + radius - 5, centerX + radius - 5, centerY + radius - 15, ACCENT_COLOR);
-
-    // Radar sweep - slower
-    for (int angle = 0; angle < 360; angle += 4) {
-        float rad = angle * 3.14159 / 180.0;
-        int x2 = centerX + cos(rad) * radius;
-        int y2 = centerY - sin(rad) * radius;
-
-        // Draw sweep line (thicker effect)
-        tft.drawLine(centerX, centerY, x2, y2, SUCCESS_COLOR);
-        int x3 = centerX + cos(rad - 0.1) * radius;
-        int y3 = centerY - sin(rad - 0.1) * radius;
-        tft.drawLine(centerX, centerY, x3, y3, 0x0320);
-
-        delay(15);
-
-        // Fade sweep line
-        tft.drawLine(centerX, centerY, x2, y2, 0x0320);
-        tft.drawLine(centerX, centerY, x3, y3, 0x0100);
-
-        // Random "detections" on radar - more visible
-        if (angle % 45 == 0 && angle > 0) {
-            float detectRad = (angle - 60) * 3.14159 / 180.0;
-            int bx = centerX + cos(detectRad) * (radius * 0.5 + (angle % 90 ? 10 : -10));
-            int by = centerY - sin(detectRad) * (radius * 0.5);
-            tft.fillCircle(bx, by, 4, ALERT_COLOR);
-            delay(50);
-        }
-    }
-
-    delay(400);
-
-    // Clear radar area
-    tft.fillRect(centerX - radius - 5, centerY - radius - 5, radius * 2 + 10, radius * 2 + 10, TFT_BLACK);
-
-    // Status messages - smaller text
+    // Status messages in main content area
     const char* messages[] = {
-        "Initializing WiFi",
-        "Starting BLE scanner",
-        "Loading patterns",
-        "Checking SD card",
+        "Initializing WiFi...",
+        "Starting BLE scanner...",
+        "Loading detection patterns...",
         "System ready"
     };
-    uint16_t msgColors[] = {WIFI_COLOR, BLE_COLOR, ALERT_COLOR, ACCENT_COLOR, SUCCESS_COLOR};
 
     tft.setTextSize(1);
-    int msgY = 100;
-    for (int i = 0; i < 5; i++) {
-        tft.setTextColor(msgColors[i]);
-        tft.setCursor(30, msgY + i * 16);
+    int msgY = 85;
+    for (int i = 0; i < 4; i++) {
+        // Draw progress indicator
+        tft.setTextColor(LOGO_COLOR);
+        tft.setCursor(20, msgY + i * 22);
+        tft.print(">");
 
-        // Type each message - slower
-        for (int c = 0; messages[i][c]; c++) {
-            tft.print(messages[i][c]);
-            delay(30);
-        }
+        // Print message
+        tft.setTextColor(TEXT_COLOR);
+        tft.setCursor(35, msgY + i * 22);
+        tft.print(messages[i]);
 
-        // Dots animation
-        tft.setTextColor(TEXT_DIM);
-        for (int d = 0; d < 3; d++) {
-            tft.print(".");
-            delay(150);
-        }
+        delay(200);
 
-        // Show OK
+        // Show checkmark
         tft.setTextColor(SUCCESS_COLOR);
-        tft.print(" OK");
+        tft.setCursor(280, msgY + i * 22);
+        tft.print("[OK]");
+
+        delay(100);
+    }
+
+    // SD card status
+    tft.setTextColor(LOGO_COLOR);
+    tft.setCursor(20, msgY + 4 * 22);
+    tft.print(">");
+    tft.setTextColor(TEXT_COLOR);
+    tft.setCursor(35, msgY + 4 * 22);
+    tft.print("SD Card: ");
+    tft.setTextColor(sdCardPresent ? SUCCESS_COLOR : ALERT_COLOR);
+    tft.print(sdCardPresent ? "OK" : "Not found");
+
+    delay(400);
+
+    // Final "SCANNING" splash
+    tft.fillRect(0, 70, 320, 170, BG_COLOR);
+
+    // Draw a simple scanning animation
+    tft.setTextSize(3);
+    tft.setTextColor(SUCCESS_COLOR);
+    tft.setCursor(70, 110);
+    tft.print("SCANNING");
+
+    // Animated dots
+    for (int d = 0; d < 3; d++) {
+        tft.setTextColor(SUCCESS_COLOR);
+        tft.setCursor(232 + d * 18, 110);
+        tft.print(".");
         delay(200);
     }
 
-    // Final ready state
+    tft.setTextSize(1);
+    tft.setTextColor(TEXT_DIM);
+    tft.setCursor(75, 150);
+    tft.print("Looking for surveillance devices...");
+
     delay(500);
-    tft.fillScreen(TFT_BLACK);
-
-    // Big "HUNTING" message - centered
-    tft.setTextSize(3);
-    tft.setTextColor(SUCCESS_COLOR);
-    tft.setCursor(97, 100);  // Centered: (320 - 7*18) / 2
-    tft.print("HUNTING");
-
-    tft.setTextSize(2);
-    tft.setTextColor(ALERT_COLOR);
-    tft.setCursor(46, 140);  // Centered: (320 - 19*12) / 2
-    tft.print("for surveillance...");
-
-    // Animated brackets - centered around HUNTING
-    for (int i = 0; i < 3; i++) {
-        tft.setTextColor(i % 2 ? SUCCESS_COLOR : ACCENT_COLOR);
-        tft.setTextSize(3);
-        tft.setCursor(70, 100);
-        tft.print(">");
-        tft.setCursor(232, 100);
-        tft.print("<");
-        delay(300);
-    }
-
-    delay(600);
 
     // Try to load calibration from SD card
     if (sdCardPresent && loadCalibration()) {
@@ -304,12 +255,20 @@ void DisplayHandler::update() {
         // Clear touch zones at start of redraw cycle
         clearTouchZones();
 
-        // Clear content area before redrawing
-        clearContentArea();
+        // Note: Don't clear content area - each draw function fills its own background
+        // This prevents screen flashing on updates
 
-        // Draw header and footer first (footer adds nav touch zones)
-        drawHeader();
-        drawFooter();
+        // CONFIG page has its own custom layout (no header)
+        // Other pages use the standard header/status bar
+        if (currentPage != PAGE_SETTINGS) {
+            drawHeader();
+            drawStatusBar();
+            drawFooter();
+            // Draw LED status row for HOME page
+            if (currentPage == PAGE_MAIN) {
+                drawLedStatusRow();
+            }
+        }
 
         // Then draw page content (may add additional touch zones)
         switch (currentPage) {
@@ -325,8 +284,7 @@ void DisplayHandler::update() {
             case PAGE_SETTINGS:
                 drawSettingsPage();
                 break;
-            case PAGE_ABOUT:
-                drawAboutPage();
+            default:
                 break;
         }
 
@@ -339,101 +297,188 @@ void DisplayHandler::clear() {
     tft.fillScreen(BG_COLOR);
 }
 
-void DisplayHandler::clearContentArea() {
-    // Clear only the content area (between header and footer)
-    tft.fillRect(0, HEADER_HEIGHT, tft.width(), tft.height() - HEADER_HEIGHT - FOOTER_HEIGHT, BG_COLOR);
+void DisplayHandler::drawHeader() {
+    // Draw header background (gray)
+    tft.fillRect(0, 0, tft.width(), HEADER_HEIGHT, HEADER_COLOR);
+    // White border at bottom
+    tft.drawFastHLine(0, HEADER_HEIGHT - 1, tft.width(), TEXT_COLOR);
+
+    // Left: Channel/Mode indicator (only on main page)
+    if (currentPage == PAGE_MAIN) {
+        tft.setTextSize(1);
+        if (bleScanning) {
+            tft.setTextColor(BLE_COLOR);
+            tft.setCursor(5, 10);
+            tft.print("BLE");
+            tft.setTextSize(2);
+            tft.setCursor(5, 22);
+            tft.print("SCAN");
+        } else {
+            tft.setTextColor(WIFI_COLOR);
+            tft.setCursor(5, 8);
+            tft.print("CH");
+            tft.setTextSize(2);
+            tft.setCursor(5, 20);
+            if (currentChannel < 10) tft.print(" ");
+            tft.print(currentChannel);
+        }
+    }
+
+    // "FLOCK YOU" title - large orange text, centered
+    tft.setTextColor(LOGO_COLOR);
+    tft.setTextSize(3);
+    // "FLOCK YOU" is 9 chars * 18px = 162px wide at size 3
+    tft.setCursor((320 - 173) / 2, 8);
+    tft.print("FLOCK<*>YOU");
+
+    // Tagline below in smaller orange text
+    tft.setTextSize(1);
+    tft.setTextColor(LOGO_COLOR);
+    // "Surveillance Detector" is 21 chars * 6px = 126px wide at size 1
+    tft.setCursor((320 - 160) / 2, 40);
+    tft.print("Scanning ALPRs <*> deflock.org");
 }
 
-void DisplayHandler::drawHeader() {
-    // Draw header background
-    tft.fillRect(0, 0, tft.width(), HEADER_HEIGHT, HEADER_COLOR);
+void DisplayHandler::drawStatusBar() {
+    uint16_t y = HEADER_HEIGHT;
+    uint16_t barHeight = STATUS_BAR_HEIGHT;
 
-    // Left: Channel/Mode indicator
-    tft.setTextSize(1);
-    if (bleScanning) {
-        // BLE mode indicator
-        tft.setTextColor(BLE_COLOR);
-        tft.setCursor(8, 8);
-        tft.print("BLE");
-        // Draw Bluetooth icon (simple)
-        tft.fillCircle(20, 24, 4, BLE_COLOR);
+    // Determine status bar content based on page and state
+    uint16_t bgColor;
+    const char* statusText = "";
+
+    if (currentPage == PAGE_MAIN) {
+        // Home page: show scanning or threat status
+        if (!detections.empty()) {
+            Detection& latest = detections.back();
+            bool isThreat = (latest.type.indexOf("flock") >= 0 || latest.type.indexOf("Flock") >= 0 ||
+                            latest.type.indexOf("Penguin") >= 0);
+            if (isThreat) {
+                bgColor = ALERT_WARN;  // Orange for threat
+                // Draw bar
+                tft.fillRect(0, y, 320, barHeight, bgColor);
+                tft.setTextColor(TFT_BLACK);
+                tft.setTextSize(1);
+                tft.setCursor(90, y + 6);
+                tft.printf("THREAT FOUND %ddBm", latest.rssi);
+                return;
+            }
+        }
+        // Default: scanning
+        bgColor = SUCCESS_COLOR;
+        statusText = "SCANNING";
+    } else if (currentPage == PAGE_LIST) {
+        bgColor = SUCCESS_COLOR;
+        statusText = "Detection List";
+    } else if (currentPage == PAGE_STATS) {
+        bgColor = SUCCESS_COLOR;
+        statusText = "Statistics";
+    } else if (currentPage == PAGE_SETTINGS) {
+        bgColor = SUCCESS_COLOR;
+        statusText = "Config";
     } else {
-        // WiFi channel indicator
-        tft.setTextColor(WIFI_COLOR);
-        tft.setCursor(8, 6);
-        tft.print("CH");
-        tft.setTextSize(2);
-        tft.setCursor(8, 18);
-        if (currentChannel < 10) tft.print(" ");
-        tft.print(currentChannel);
+        return;  // No status bar for calibration page
     }
 
-    // Center: Title
-    tft.setTextColor(TEXT_COLOR);
-    tft.setTextSize(2);
-    tft.setCursor(100, 10);
-    tft.print("FLOCK YOU");
-
-    // Right: Detection count with color coding
+    // Draw status bar
+    tft.fillRect(0, y, 320, barHeight, bgColor);
+    tft.setTextColor(TFT_BLACK);
     tft.setTextSize(1);
+    // Center the text
+    int textWidth = strlen(statusText) * 6;
+    tft.setCursor((320 - textWidth) / 2, y + 6);
+    tft.print(statusText);
+}
+
+void DisplayHandler::drawLedStatusRow() {
+    // Draw LED status indicators and system info row above nav buttons
+    uint16_t y = 240 - FOOTER_HEIGHT - LED_STATUS_HEIGHT;
+
+    tft.fillRect(0, y, 320, LED_STATUS_HEIGHT, BG_COLOR);
+
+    tft.setTextSize(1);
+
+    // LED indicators: Scan, Detect, Alert
+    // Green dot for Scan
+    tft.fillCircle(10, y + 11, 4, SUCCESS_COLOR);
     tft.setTextColor(TEXT_DIM);
-    tft.setCursor(265, 6);
-    tft.print("DET");
+    tft.setCursor(18, y + 7);
+    tft.print("Scan");
 
-    // Detection number - color based on count
-    tft.setTextSize(2);
-    if (flockDetections > 0) {
-        tft.setTextColor(ALERT_COLOR);  // Red if Flock detected
-    } else if (totalDetections > 0) {
-        tft.setTextColor(SUCCESS_COLOR);  // Green if any detections
+    // Red dot for Detect
+    tft.fillCircle(60, y + 11, 4, ALERT_COLOR);
+    tft.setCursor(68, y + 7);
+    tft.print("Detect");
+
+    // Orange dot for Alert
+    tft.fillCircle(120, y + 11, 4, ALERT_WARN);
+    tft.setCursor(128, y + 7);
+    tft.print("Alert");
+
+    // Divider
+    tft.drawFastVLine(170, y + 4, 14, TEXT_DIM);
+
+    // SD card status
+    tft.setCursor(178, y + 7);
+    tft.print("SD");
+    if (sdCardPresent) {
+        tft.fillCircle(198, y + 11, 4, SUCCESS_COLOR);
     } else {
-        tft.setTextColor(TEXT_DIM);  // Dim if no detections
+        tft.fillCircle(198, y + 11, 4, ALERT_COLOR);
     }
-    tft.setCursor(265, 18);
-    if (totalDetections < 100) tft.print(" ");
-    if (totalDetections < 10) tft.print(" ");
-    tft.print(totalDetections);
+
+    // OUI database status
+    tft.setCursor(210, y + 7);
+    tft.print("OUI");
+    if (sdCardPresent && SD.exists(OUI_FILE)) {
+        tft.fillCircle(236, y + 11, 4, SUCCESS_COLOR);
+    } else {
+        tft.fillCircle(236, y + 11, 4, TEXT_DIM);
+    }
+
+    // Uptime
+    tft.setTextColor(TEXT_DIM);
+    tft.setCursor(250, y + 7);
+    tft.print("UP ");
+    uint32_t uptime = millis() / 60000;  // minutes
+    if (uptime < 60) {
+        tft.printf("%dm", uptime);
+    } else {
+        tft.printf("%dh", uptime / 60);
+    }
 }
 
 void DisplayHandler::drawFooter() {
     uint16_t y = tft.height() - FOOTER_HEIGHT;
 
-    // Draw footer background
+    // Draw footer background (black)
     tft.fillRect(0, y, tft.width(), FOOTER_HEIGHT, FOOTER_COLOR);
 
-    // Draw navigation buttons (5 buttons)
-    uint16_t buttonWidth = 62;
+    // Draw navigation buttons (4 buttons)
+    uint16_t buttonWidth = 78;
     uint16_t padding = 2;
-    uint16_t startX = 3;
+    uint16_t startX = 2;
 
-    // Button labels: HOME, LIST, STAT, CONF, CAL
-    const char* labels[] = {"HOME", "LIST", "STAT", "CONF", "CAL"};
+    // Button labels: HOME, LIST, STATS, CONFIG
+    const char* labels[] = {"HOME", "LIST", "STATS", "CONFIG"};
     void (*callbacks[])() = {onMainButtonPress, onListButtonPress, onStatsButtonPress,
-                             onSettingsButtonPress, onCalibratePress};
+                             onSettingsButtonPress};
 
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 4; i++) {
         uint16_t x = startX + i * (buttonWidth + padding);
         uint16_t btnY = y + 3;
         uint16_t btnH = FOOTER_HEIGHT - 6;
 
-        // Determine button color
-        uint16_t bgColor, textColor;
-        if (i == currentPage && i < 4) {  // CAL (4) doesn't have a page
-            bgColor = BUTTON_ACTIVE;
-            textColor = ACCENT_COLOR;
-        } else if (i == 4) {  // CAL - yellow
-            bgColor = 0x4200;  // Dark yellow
-            textColor = TFT_YELLOW;
-        } else {
-            bgColor = FOOTER_COLOR;
-            textColor = TEXT_DIM;
-        }
+        // Determine button style
+        bool isActive = (i == currentPage);
+        uint16_t bgColor = isActive ? BUTTON_ACTIVE : BG_COLOR;
+        uint16_t borderColor = BUTTON_BORDER;
+        uint16_t textColor = TEXT_COLOR;
 
-        // Draw button
+        // Draw button background
         tft.fillRect(x, btnY, buttonWidth, btnH, bgColor);
-        if (i == currentPage && i < 4) {
-            tft.drawRect(x, btnY, buttonWidth, btnH, ACCENT_COLOR);
-        }
+        // Draw white border
+        tft.drawRect(x, btnY, buttonWidth, btnH, borderColor);
 
         // Draw label centered
         tft.setTextColor(textColor);
@@ -443,229 +488,143 @@ void DisplayHandler::drawFooter() {
         tft.setCursor(textX, textY);
         tft.print(labels[i]);
 
-        // Touch zone: shift down 3px, extend to screen bottom
-        addTouchZone(x, btnY + 3, x + buttonWidth, tft.height(), callbacks[i], labels[i]);
+        // Touch zone
+        addTouchZone(x, btnY, x + buttonWidth, tft.height(), callbacks[i], labels[i]);
     }
 }
 
 void DisplayHandler::drawMainPage() {
-    uint16_t contentBottom = tft.height() - FOOTER_HEIGHT;  // 208
-    uint16_t yPos = HEADER_HEIGHT + 2;  // 38
+    // Content area: from below status bar to above LED status row
+    uint16_t yStart = HEADER_HEIGHT + STATUS_BAR_HEIGHT;
+    uint16_t yEnd = 240 - FOOTER_HEIGHT - LED_STATUS_HEIGHT;
+    uint16_t contentHeight = yEnd - yStart;
 
-    // === Stats Bar ===
-    tft.fillRect(0, yPos, 320, 18, BG_DARK);
-    tft.setTextSize(1);
+    // Fill background
+    tft.fillRect(0, yStart, 320, contentHeight, BG_COLOR);
 
-    // Total detections
-    tft.setTextColor(TEXT_DIM);
-    tft.setCursor(5, yPos + 5);
-    tft.print("ALL:");
-    tft.setTextColor(TEXT_COLOR);
-    tft.printf("%d", totalDetections);
-
-    // Flock count (red if any)
-    tft.setTextColor((flockDetections > 0) ? ALERT_COLOR : TEXT_DIM);
-    tft.setCursor(70, yPos + 5);
-    tft.print("FLOCK:");
-    tft.printf("%d", flockDetections);
-
-    // BLE count
-    tft.setTextColor(BLE_COLOR);
-    tft.setCursor(155, yPos + 5);
-    tft.print("BLE:");
-    tft.setTextColor(TEXT_COLOR);
-    tft.printf("%d", bleDetections);
-
-    // Scan mode indicator
-    tft.setCursor(230, yPos + 5);
-    if (bleScanning) {
-        tft.setTextColor(BLE_COLOR);
-        tft.print("BLE SCAN");
-    } else {
-        tft.setTextColor(WIFI_COLOR);
-        tft.printf("WiFi CH%d", currentChannel);
+    // Check for threat detection
+    bool hasThreat = false;
+    Detection* latestDetection = nullptr;
+    if (!detections.empty()) {
+        latestDetection = &detections.back();
+        hasThreat = (latestDetection->type.indexOf("flock") >= 0 ||
+                     latestDetection->type.indexOf("Flock") >= 0 ||
+                     latestDetection->type.indexOf("Penguin") >= 0);
     }
 
-    yPos += 20;
+    if (hasThreat && latestDetection != nullptr) {
+        // === STATE 3: THREAT FOUND ===
+        tft.fillRect(10, yStart + 5, 300, contentHeight - 10, PANEL_COLOR);
+        tft.drawRect(10, yStart + 5, 300, contentHeight - 10, ALERT_COLOR);
 
-    // Calculate remaining space for detection panel
-    // Leave 24px for status bar at bottom
-    uint16_t panelHeight = contentBottom - yPos - 26;  // ~120px
+        // Large vendor name in red, centered
+        tft.setTextColor(ALERT_COLOR);
+        tft.setTextSize(3);
+        String vendorDisplay = latestDetection->vendor;
+        if (vendorDisplay.length() > 12) vendorDisplay = vendorDisplay.substring(0, 12);
+        int textWidth = vendorDisplay.length() * 18;
+        tft.setCursor((320 - textWidth) / 2, yStart + 15);
+        tft.print(vendorDisplay);
 
-    // === Latest Detection Panel ===
-    if (!detections.empty()) {
-        Detection& latest = detections.back();
-        bool isThreat = (latest.type.indexOf("flock") >= 0 || latest.type.indexOf("Flock") >= 0 ||
-                        latest.type.indexOf("Penguin") >= 0);
-
-        tft.fillRect(3, yPos, 314, panelHeight, BG_DARK);
-        tft.drawRect(3, yPos, 314, panelHeight, isThreat ? ALERT_COLOR : ACCENT_COLOR);
-
-        // Header row: label + SSID
-        tft.setTextColor(isThreat ? ALERT_COLOR : ACCENT_COLOR);
-        tft.setTextSize(1);
-        tft.setCursor(8, yPos + 4);
-        tft.print(isThreat ? "! THREAT DETECTED" : "LATEST DETECTION");
-
-        // SSID (larger)
+        // SSID below
         tft.setTextSize(2);
         tft.setTextColor(TEXT_COLOR);
-        tft.setCursor(8, yPos + 18);
-        tft.print(latest.ssid.substring(0, 18));
+        String ssidDisplay = latestDetection->ssid;
+        if (ssidDisplay.length() > 18) ssidDisplay = ssidDisplay.substring(0, 18);
+        textWidth = ssidDisplay.length() * 12;
+        tft.setCursor((320 - textWidth) / 2, yStart + 42);
+        tft.print(ssidDisplay);
 
-        // Vendor row (highlighted)
-        tft.setTextSize(1);
-        tft.setTextColor(latest.vendor == "Flock Safety" ? ALERT_COLOR : ACCENT_COLOR);
-        tft.setCursor(8, yPos + 40);
-        tft.print("Vendor: ");
-        tft.setTextSize(2);
-        tft.print(latest.vendor.substring(0, 14));
-
-        // MAC address + Type
+        // MAC and signal info
         tft.setTextSize(1);
         tft.setTextColor(TEXT_DIM);
-        tft.setCursor(8, yPos + 62);
+        tft.setCursor(20, yStart + 65);
         tft.print("MAC: ");
         tft.setTextColor(TEXT_COLOR);
-        tft.print(latest.mac);
+        tft.print(latestDetection->mac);
 
-        tft.setTextColor(latest.type == "BLE" ? BLE_COLOR : WIFI_COLOR);
-        tft.setCursor(180, yPos + 62);
-        tft.print(latest.type == "BLE" ? "[BLE]" : "[WiFi]");
-
-        // Signal strength section
+        // Signal strength
         tft.setTextColor(TEXT_DIM);
-        tft.setCursor(8, yPos + 78);
+        tft.setCursor(20, yStart + 80);
         tft.print("Signal: ");
         tft.setTextColor(TEXT_COLOR);
-        tft.printf("%ddBm ", latest.rssi);
-        drawSignalStrength(90, yPos + 76, latest.rssi);
+        tft.printf("%ddBm ", latestDetection->rssi);
+        drawSignalStrength(100, yStart + 78, latestDetection->rssi);
 
-        // Signal quality text
-        tft.setCursor(120, yPos + 78);
-        if (latest.rssi >= -50) {
-            tft.setTextColor(SUCCESS_COLOR);
-            tft.print("(Excellent)");
-        } else if (latest.rssi >= -60) {
-            tft.setTextColor(SUCCESS_COLOR);
-            tft.print("(Good)");
-        } else if (latest.rssi >= -70) {
-            tft.setTextColor(ALERT_WARN);
-            tft.print("(Fair)");
-        } else {
-            tft.setTextColor(ALERT_COLOR);
-            tft.print("(Weak)");
-        }
+    } else if (!detections.empty() && latestDetection != nullptr) {
+        // === STATE 2: SCANNING with recent detection ===
+        tft.fillRect(10, yStart + 5, 300, contentHeight - 10, PANEL_COLOR);
+        tft.drawRect(10, yStart + 5, 300, contentHeight - 10, SUCCESS_COLOR);
 
-        // Timestamp and session count
+        // Latest detection header
+        tft.setTextColor(SUCCESS_COLOR);
+        tft.setTextSize(1);
+        tft.setCursor(20, yStart + 12);
+        tft.print("LATEST DETECTION:");
+
+        // SSID large
+        tft.setTextSize(2);
+        tft.setTextColor(TEXT_COLOR);
+        tft.setCursor(20, yStart + 28);
+        tft.print(latestDetection->ssid.substring(0, 18));
+
+        // Vendor
+        tft.setTextSize(1);
         tft.setTextColor(TEXT_DIM);
-        tft.setCursor(8, yPos + 94);
-        uint32_t age = (millis() - latest.timestamp) / 1000;
-        if (age < 60) {
-            tft.printf("Detected %ds ago", age);
-        } else if (age < 3600) {
-            tft.printf("Detected %dm %ds ago", age / 60, age % 60);
-        } else {
-            tft.printf("Detected %dh %dm ago", age / 3600, (age % 3600) / 60);
-        }
+        tft.setCursor(20, yStart + 50);
+        tft.print("Vendor: ");
+        tft.setTextColor(latestDetection->vendor == "Flock Safety" ? ALERT_COLOR : ACCENT_COLOR);
+        tft.print(latestDetection->vendor.substring(0, 18));
 
-        tft.setCursor(200, yPos + 94);
+        // MAC
+        tft.setTextColor(TEXT_DIM);
+        tft.setCursor(20, yStart + 65);
+        tft.print("MAC: ");
+        tft.setTextColor(TEXT_COLOR);
+        tft.print(latestDetection->mac);
+
+        // Signal + stats
+        tft.setTextColor(TEXT_DIM);
+        tft.setCursor(20, yStart + 80);
+        tft.printf("Signal: %ddBm", latestDetection->rssi);
+        drawSignalStrength(120, yStart + 78, latestDetection->rssi);
+
+        tft.setCursor(180, yStart + 80);
         tft.printf("Total: %d", totalDetections);
 
     } else {
-        tft.fillRect(3, yPos, 314, panelHeight, BG_DARK);
-        tft.drawRect(3, yPos, 314, panelHeight, TEXT_DIM);
+        // === STATE 1: NO DETECTIONS ===
+        tft.fillRect(10, yStart + 10, 300, contentHeight - 20, PANEL_COLOR);
+        tft.drawRect(10, yStart + 10, 300, contentHeight - 20, TEXT_DIM);
 
-        // Centered "No detections" message
+        // Centered message
         tft.setTextColor(TEXT_DIM);
         tft.setTextSize(2);
-        tft.setCursor(45, yPos + 30);
-        tft.print("No Detections");
+        tft.setCursor(40, yStart + 35);
+        tft.print("No Detections...");
 
         tft.setTextSize(1);
-        tft.setCursor(55, yPos + 60);
-        tft.print("Scanning for surveillance");
-        tft.setCursor(85, yPos + 75);
-        tft.print("devices...");
-
-        // Show what we're looking for
-        tft.setTextColor(ALERT_COLOR);
-        tft.setCursor(30, yPos + 95);
-        tft.print("Flock Safety | Penguin | Pigvision");
-    }
-
-    yPos += panelHeight + 2;
-
-    // === Status Bar (bottom) ===
-    tft.fillRect(3, yPos, 314, 22, BG_DARK);
-    tft.drawRect(3, yPos, 314, 22, TEXT_DIM);
-
-    tft.setTextSize(1);
-
-    // LED indicators
-    tft.fillCircle(12, yPos + 11, 4, SUCCESS_COLOR);
-    tft.setTextColor(TEXT_COLOR);
-    tft.setCursor(20, yPos + 7);
-    tft.print("Scan");
-
-    tft.fillCircle(62, yPos + 11, 4, ALERT_COLOR);
-    tft.setCursor(70, yPos + 7);
-    tft.print("Detect");
-
-    tft.fillCircle(122, yPos + 11, 4, ALERT_WARN);
-    tft.setCursor(130, yPos + 7);
-    tft.print("Alert");
-
-    // Divider
-    tft.drawFastVLine(175, yPos + 4, 14, TEXT_DIM);
-
-    // SD card status
-    tft.setCursor(182, yPos + 7);
-    if (sdCardPresent) {
-        tft.setTextColor(SUCCESS_COLOR);
-        tft.print("SD");
-        tft.fillCircle(203, yPos + 11, 4, SUCCESS_COLOR);
-    } else {
-        tft.setTextColor(ALERT_COLOR);
-        tft.print("SD!");
-        tft.fillCircle(210, yPos + 11, 4, ALERT_COLOR);
-    }
-
-    // OUI database status
-    tft.setCursor(222, yPos + 7);
-    if (sdCardPresent && SD.exists(OUI_FILE)) {
-        tft.setTextColor(SUCCESS_COLOR);
-        tft.print("OUI");
-        tft.fillCircle(250, yPos + 11, 4, SUCCESS_COLOR);
-    } else {
-        tft.setTextColor(TEXT_DIM);
-        tft.print("OUI");
-        tft.fillCircle(250, yPos + 11, 4, TEXT_DIM);
-    }
-
-    // Uptime
-    tft.setTextColor(TEXT_DIM);
-    tft.setCursor(260, yPos + 7);
-    uint32_t uptime = millis() / 1000;
-    if (uptime < 3600) {
-        tft.printf("%dm", uptime / 60);
-    } else {
-        tft.printf("%dh", uptime / 3600);
+        tft.setCursor(65, yStart + 60);
+        tft.print("Scanning for devices.");
     }
 }
 
 void DisplayHandler::drawListPage() {
-    uint16_t yPos = HEADER_HEIGHT + 5;
-    uint16_t listHeight = tft.height() - HEADER_HEIGHT - FOOTER_HEIGHT - 10;
+    // Start below status bar - no LED row on this page, so more room
+    uint16_t yPos = HEADER_HEIGHT + STATUS_BAR_HEIGHT + 2;
+    // Calculate available list height (extends to just above footer)
+    uint16_t listBottom = 240 - FOOTER_HEIGHT - 14;  // Leave room for count
+    uint16_t listHeight = listBottom - yPos;
     uint16_t maxItems = listHeight / LIST_ITEM_HEIGHT;
 
     tft.setTextSize(1);
 
     if (detections.empty()) {
-        tft.fillRect(5, 80, 310, 50, BG_DARK);
-        tft.drawRect(5, 80, 310, 50, TEXT_DIM);
+        uint16_t emptyY = HEADER_HEIGHT + STATUS_BAR_HEIGHT + 40;
+        tft.fillRect(5, emptyY, 310, 50, PANEL_COLOR);
+        tft.drawRect(5, emptyY, 310, 50, TEXT_DIM);
         tft.setTextColor(TEXT_DIM);
-        tft.setCursor(85, 100);
+        tft.setCursor(85, emptyY + 20);
         tft.print("No detections yet...");
         return;
     }
@@ -684,7 +643,7 @@ void DisplayHandler::drawListPage() {
         bool isBLE = (det.type == "BLE");
 
         // Row background with left color indicator
-        uint16_t rowColor = ((i - startIdx) % 2 == 0) ? BG_DARK : BG_COLOR;
+        uint16_t rowColor = ((i - startIdx) % 2 == 0) ? PANEL_COLOR : BG_COLOR;
         tft.fillRect(2, yPos, tft.width() - 4, LIST_ITEM_HEIGHT - 1, rowColor);
 
         // Left color bar indicator
@@ -719,9 +678,9 @@ void DisplayHandler::drawListPage() {
         yPos += LIST_ITEM_HEIGHT;
     }
 
-    // Show count at bottom
+    // Show count at bottom (just above footer)
     tft.setTextColor(TEXT_DIM);
-    tft.setCursor(5, tft.height() - FOOTER_HEIGHT - 12);
+    tft.setCursor(5, 240 - FOOTER_HEIGHT - 12);
     tft.print("Showing ");
     tft.print(min((size_t)maxItems, detections.size()));
     tft.print(" of ");
@@ -729,254 +688,308 @@ void DisplayHandler::drawListPage() {
 }
 
 void DisplayHandler::drawStatsPage() {
-    uint16_t yPos = HEADER_HEIGHT + 10;
+    // Fill background for this page area
+    uint16_t contentTop = HEADER_HEIGHT + STATUS_BAR_HEIGHT;
+    uint16_t contentBottom = 240 - FOOTER_HEIGHT;
+    tft.fillRect(0, contentTop, 320, contentBottom - contentTop, BG_COLOR);
 
+    // Start below status bar - no LED row on this page
+    uint16_t yPos = contentTop + 5;
+
+    // Stats panel
+    tft.fillRect(5, yPos, 310, 85, PANEL_COLOR);
+    tft.drawRect(5, yPos, 310, 85, TEXT_DIM);
+
+    // Total detections - larger text
     tft.setTextSize(2);
-    tft.setTextColor(TEXT_COLOR, BG_COLOR);
-    tft.setCursor(100, yPos);
-    tft.print("STATS");
-    yPos += 30;
-
-    tft.setTextSize(1);
-
-    // Total detections
-    tft.setTextColor(SUCCESS_COLOR, BG_COLOR);
-    tft.setCursor(10, yPos);
-    tft.print("Total: ");
+    tft.setTextColor(TEXT_DIM);
+    tft.setCursor(10, yPos + 8);
+    tft.print("Total:");
+    tft.setTextColor(TEXT_COLOR);
+    tft.setCursor(90, yPos + 8);
     tft.print(totalDetections);
-    yPos += 18;
 
     // Flock detections
-    tft.setTextColor(ALERT_COLOR, BG_COLOR);
-    tft.setCursor(10, yPos);
-    tft.print("Flock: ");
+    tft.setTextColor(ALERT_COLOR);
+    tft.setCursor(10, yPos + 32);
+    tft.print("Flock:");
+    tft.setCursor(90, yPos + 32);
     tft.print(flockDetections);
     if (totalDetections > 0) {
-        tft.print(" (");
-        tft.print((int)(flockDetections * 100 / totalDetections));
-        tft.print("%)");
+        tft.setTextSize(1);
+        tft.setCursor(140, yPos + 38);
+        tft.printf("(%d%%)", (int)(flockDetections * 100 / totalDetections));
+        tft.setTextSize(2);
     }
-    yPos += 18;
 
     // BLE detections
-    tft.setTextColor(INFO_COLOR, BG_COLOR);
-    tft.setCursor(10, yPos);
-    tft.print("BLE: ");
+    tft.setTextColor(BLE_COLOR);
+    tft.setCursor(170, yPos + 8);
+    tft.print("BLE:");
+    tft.setTextColor(TEXT_COLOR);
+    tft.setCursor(230, yPos + 8);
     tft.print(bleDetections);
-    if (totalDetections > 0) {
-        tft.print(" (");
-        tft.print((int)(bleDetections * 100 / totalDetections));
-        tft.print("%)");
-    }
-    yPos += 18;
 
     // WiFi detections
     uint32_t wifiDetections = totalDetections - bleDetections;
-    tft.setTextColor(WARNING_COLOR, BG_COLOR);
-    tft.setCursor(10, yPos);
-    tft.print("WiFi: ");
+    tft.setTextColor(WIFI_COLOR);
+    tft.setCursor(170, yPos + 32);
+    tft.print("WiFi:");
+    tft.setTextColor(TEXT_COLOR);
+    tft.setCursor(230, yPos + 32);
     tft.print(wifiDetections);
-    yPos += 25;
 
     // Draw progress bars
-    if (totalDetections > 0) {
-        tft.setTextColor(TEXT_COLOR, BG_COLOR);
-        tft.setCursor(10, yPos);
-        tft.print("Distribution:");
-        yPos += 15;
+    tft.setTextSize(1);
+    tft.setTextColor(TEXT_DIM);
+    tft.setCursor(10, yPos + 55);
+    tft.print("Distribution:");
 
+    if (totalDetections > 0) {
         // Flock progress bar
         float flockProgress = (float)flockDetections / totalDetections;
-        drawProgressBar(10, yPos, 300, 15, flockProgress, ALERT_COLOR);
-        yPos += 20;
+        drawProgressBar(10, yPos + 68, 145, 12, flockProgress, ALERT_COLOR);
 
         // BLE progress bar
         float bleProgress = (float)bleDetections / totalDetections;
-        drawProgressBar(10, yPos, 300, 15, bleProgress, INFO_COLOR);
-        yPos += 25;
+        drawProgressBar(160, yPos + 68, 145, 12, bleProgress, BLE_COLOR);
     } else {
-        yPos = HEADER_HEIGHT + 120;
+        // Empty bars
+        tft.drawRect(10, yPos + 68, 145, 12, TEXT_DIM);
+        tft.drawRect(160, yPos + 68, 145, 12, TEXT_DIM);
     }
 
-    // Clear button
-    uint16_t clrX = 110, clrW = 100, clrH = 28;
-    tft.fillRect(clrX, yPos, clrW, clrH, 0x4000);  // Dark red
-    tft.drawRect(clrX, yPos, clrW, clrH, ALERT_COLOR);
+    // Clear button - positioned at bottom with proper spacing
+    uint16_t clrW = 100, clrH = 28;
+    uint16_t clrX = (320 - clrW) / 2;  // Center horizontally
+    uint16_t clrY = contentBottom - clrH - 5;  // 5px above footer
+    tft.fillRect(clrX, clrY, clrW, clrH, 0x4000);  // Dark red
+    tft.drawRect(clrX, clrY, clrW, clrH, ALERT_COLOR);
     tft.setTextColor(TFT_WHITE);
     tft.setTextSize(2);
-    tft.setCursor(clrX + 14, yPos + 6);
+    // "CLEAR" is 5 chars * 12px = 60px, center in 100px button: (100-60)/2 = 20
+    tft.setCursor(clrX + 20, clrY + 6);
     tft.print("CLEAR");
-    addTouchZone(clrX, yPos, clrX + clrW, yPos + clrH, onClearButtonPress, "CLR");
+    addTouchZone(clrX, clrY, clrX + clrW, clrY + clrH, onClearButtonPress, "CLR");
 }
 
 void DisplayHandler::drawSettingsPage() {
-    uint16_t yPos = HEADER_HEIGHT + 5;
-    uint16_t btnW = 40;
-    uint16_t btnH = 24;
+    // CONFIG page: no header, no LED key row
+    // Layout: Title bar, SD Card panel, control rows, CALIBRATE button, footer
+    uint16_t contentBottom = 240 - FOOTER_HEIGHT;  // 207
 
-    // Title
+    // Title bar
+    tft.fillRect(0, 0, 320, 22, HEADER_COLOR);
+    tft.drawFastHLine(0, 21, 320, TEXT_COLOR);
+    tft.setTextColor(LOGO_COLOR);
     tft.setTextSize(2);
-    tft.setTextColor(ACCENT_COLOR);
-    tft.setCursor(100, yPos);
-    tft.print("SETTINGS");
-    yPos += 28;
+    tft.setCursor(108, 3);
+    tft.print("CONFIG");
 
-    tft.setTextSize(1);
+    // Content area
+    tft.fillRect(0, 22, 320, contentBottom - 22, BG_COLOR);
 
-    // === Display Brightness Control ===
+    uint16_t yPos = 26;
+
+    // === SD Card Info Panel (at top) ===
+    uint16_t sdPanelH = 32;
+    tft.fillRect(5, yPos, 310, sdPanelH, PANEL_COLOR);
+    tft.drawRect(5, yPos, 310, sdPanelH, sdCardPresent ? SUCCESS_COLOR : TEXT_DIM);
+
     tft.setTextColor(TEXT_COLOR);
-    tft.setCursor(10, yPos + 6);
-    tft.print("Display:");
-
-    // Current percentage
-    int pct = (brightness * 100) / 255;
-    tft.setCursor(70, yPos + 6);
-    tft.setTextColor(ACCENT_COLOR);
-    tft.printf("%3d%%", pct);
-
-    // Minus button
-    uint16_t minusBtnX = 110;
-    tft.fillRect(minusBtnX, yPos, btnW, btnH, BG_DARK);
-    tft.drawRect(minusBtnX, yPos, btnW, btnH, ACCENT_COLOR);
-    tft.setTextColor(ACCENT_COLOR);
-    tft.setTextSize(2);
-    tft.setCursor(minusBtnX + 14, yPos + 4);
-    tft.print("-");
-    addTouchZone(minusBtnX, yPos, minusBtnX + btnW, yPos + btnH, onBrightnessDown, "BR-");
-
-    // Plus button
-    uint16_t plusBtnX = 155;
-    tft.fillRect(plusBtnX, yPos, btnW, btnH, BG_DARK);
-    tft.drawRect(plusBtnX, yPos, btnW, btnH, ACCENT_COLOR);
-    tft.setTextColor(ACCENT_COLOR);
-    tft.setCursor(plusBtnX + 14, yPos + 4);
-    tft.print("+");
-    addTouchZone(plusBtnX, yPos, plusBtnX + btnW, yPos + btnH, onBrightnessUp, "BR+");
-
-    // Auto brightness toggle button
-    uint16_t autoBtnX = 210;
-    uint16_t autoBtnW = 95;
-    uint16_t autoColor = autoBrightness ? SUCCESS_COLOR : TEXT_DIM;
-    tft.fillRect(autoBtnX, yPos, autoBtnW, btnH, autoBrightness ? 0x0320 : BG_DARK);
-    tft.drawRect(autoBtnX, yPos, autoBtnW, btnH, autoColor);
-    tft.setTextColor(autoColor);
     tft.setTextSize(1);
-    tft.setCursor(autoBtnX + 8, yPos + 8);
-    tft.print(autoBrightness ? "AUTO: ON" : "AUTO: OFF");
-    addTouchZone(autoBtnX, yPos, autoBtnX + autoBtnW, yPos + btnH, onAutoBrightnessToggle, "AUTO");
-
-    yPos += 32;
-
-    // === RGB LED Brightness Control ===
-    tft.setTextSize(1);
-    tft.setTextColor(TEXT_COLOR);
-    tft.setCursor(10, yPos + 6);
-    tft.print("RGB LED:");
-
-    // Current percentage
-    int rgbPct = (rgbBrightness * 100) / 255;
-    tft.setCursor(70, yPos + 6);
-    tft.setTextColor(ALERT_COLOR);
-    tft.printf("%3d%%", rgbPct);
-
-    // Minus button
-    tft.fillRect(minusBtnX, yPos, btnW, btnH, BG_DARK);
-    tft.drawRect(minusBtnX, yPos, btnW, btnH, ALERT_COLOR);
-    tft.setTextColor(ALERT_COLOR);
-    tft.setTextSize(2);
-    tft.setCursor(minusBtnX + 14, yPos + 4);
-    tft.print("-");
-    addTouchZone(minusBtnX, yPos, minusBtnX + btnW, yPos + btnH, onRgbBrightnessDown, "RGB-");
-
-    // Plus button
-    tft.fillRect(plusBtnX, yPos, btnW, btnH, BG_DARK);
-    tft.drawRect(plusBtnX, yPos, btnW, btnH, ALERT_COLOR);
-    tft.setTextColor(ALERT_COLOR);
-    tft.setCursor(plusBtnX + 14, yPos + 4);
-    tft.print("+");
-    addTouchZone(plusBtnX, yPos, plusBtnX + btnW, yPos + btnH, onRgbBrightnessUp, "RGB+");
-
-    // LED Alert toggle button (replaces RGB preview bar)
-    uint16_t ledBtnX = 210, ledBtnW = 95;
-    uint16_t ledColor = ledAlertsEnabled ? SUCCESS_COLOR : ALERT_COLOR;
-    tft.fillRect(ledBtnX, yPos, ledBtnW, btnH, ledAlertsEnabled ? 0x0320 : 0x4000);
-    tft.drawRect(ledBtnX, yPos, ledBtnW, btnH, ledColor);
-    tft.setTextColor(TFT_WHITE);
-    tft.setTextSize(1);
-    tft.setCursor(ledBtnX + 8, yPos + 8);
-    tft.print(ledAlertsEnabled ? "LED: ON" : "LED: OFF");
-    addTouchZone(ledBtnX, yPos, ledBtnX + ledBtnW, yPos + btnH, onLedAlertToggle, "LED");
-
-    yPos += 35;
-
-    // === SD Card Status ===
-    tft.fillRect(5, yPos, 310, 40, BG_DARK);
-    tft.drawRect(5, yPos, 310, 40, sdCardPresent ? SUCCESS_COLOR : TEXT_DIM);
-
-    tft.setTextColor(sdCardPresent ? SUCCESS_COLOR : ALERT_COLOR);
-    tft.setTextSize(1);
-    tft.setCursor(10, yPos + 5);
-    tft.print("SD Card: ");
-    tft.print(sdCardPresent ? "READY" : "NOT PRESENT");
+    tft.setCursor(10, yPos + 4);
+    tft.print("SD Card & Files:");
 
     if (sdCardPresent) {
-        tft.setTextColor(TEXT_DIM);
+        tft.setTextColor(SUCCESS_COLOR);
         tft.setCursor(10, yPos + 18);
-        tft.print("Logged: ");
-        tft.setTextColor(TEXT_COLOR);
-        tft.print(detectionsLogged);
+        tft.print("SD: OK");
+
+        tft.setCursor(60, yPos + 18);
+        if (SD.exists(TOUCH_CAL_FILE)) {
+            tft.setTextColor(SUCCESS_COLOR);
+            tft.print("cal: OK");
+        } else {
+            tft.setTextColor(ALERT_COLOR);
+            tft.print("cal: MISS");
+        }
+
+        tft.setCursor(120, yPos + 18);
+        if (SD.exists(OUI_FILE)) {
+            tft.setTextColor(SUCCESS_COLOR);
+            tft.print("oui: OK");
+        } else {
+            tft.setTextColor(TEXT_DIM);
+            tft.print("oui: -");
+        }
+
         tft.setTextColor(TEXT_DIM);
-        tft.print(" | ");
-        tft.setTextColor(TEXT_COLOR);
-        tft.print(logFileName);
+        tft.setCursor(180, yPos + 18);
+        tft.printf("Log: %d", detectionsLogged);
+    } else {
+        tft.setTextColor(ALERT_COLOR);
+        tft.setCursor(10, yPos + 18);
+        tft.print("SD Card not present - Insert for logging");
     }
-    yPos += 48;
 
-    // Hardware Info
-    tft.setTextColor(TEXT_DIM);
+    yPos += sdPanelH + 8;
+
+    // Control row dimensions
+    uint16_t rowH = 28;
+    uint16_t toggleW = 44;
+    uint16_t btnW = 32;
+    uint16_t btnH = 24;
+    uint16_t maxW = 40;
+
+    // === Row 1: Display Brightness ===
+    uint16_t autoColor = autoBrightness ? SUCCESS_COLOR : TEXT_DIM;
+    tft.fillRect(5, yPos, toggleW, btnH, autoBrightness ? 0x0320 : PANEL_COLOR);
+    tft.drawRect(5, yPos, toggleW, btnH, autoColor);
+    tft.setTextColor(TEXT_COLOR);
     tft.setTextSize(1);
-    tft.setCursor(10, yPos);
-    tft.print("ILI9341 320x240 | XPT2046 Touch");
-}
+    tft.setCursor(autoBrightness ? 9 : 12, yPos + 8);
+    tft.print(autoBrightness ? "AUTO" : "MAN");
+    addTouchZone(5, yPos, 5 + toggleW, yPos + btnH, onAutoBrightnessToggle, "AUTO");
 
-void DisplayHandler::drawAboutPage() {
-    uint16_t yPos = HEADER_HEIGHT + 15;
+    tft.setTextColor(TEXT_COLOR);
+    tft.setCursor(55, yPos + 8);
+    tft.print("Display:");
 
+    int pct = (brightness * 100) / 255;
+    tft.setTextColor(SLIDER_COLOR);
     tft.setTextSize(2);
-    tft.setTextColor(TEXT_COLOR, BG_COLOR);
-    tft.setCursor(60, yPos);
-    tft.print("FLOCK YOU");
-    yPos += 25;
+    tft.setCursor(115, yPos + 4);
+    tft.printf("%3d%%", pct);
 
+    uint16_t minusX = 175;
+    tft.fillRect(minusX, yPos, btnW, btnH, PANEL_COLOR);
+    tft.drawRect(minusX, yPos, btnW, btnH, SLIDER_COLOR);
+    tft.setTextColor(SLIDER_COLOR);
+    tft.setCursor(minusX + 11, yPos + 4);
+    tft.print("-");
+    addTouchZone(minusX, yPos, minusX + btnW, yPos + btnH, onBrightnessDown, "BR-");
+
+    uint16_t plusX = minusX + btnW + 4;
+    tft.fillRect(plusX, yPos, btnW, btnH, PANEL_COLOR);
+    tft.drawRect(plusX, yPos, btnW, btnH, SLIDER_COLOR);
+    tft.setTextColor(SLIDER_COLOR);
+    tft.setCursor(plusX + 11, yPos + 4);
+    tft.print("+");
+    addTouchZone(plusX, yPos, plusX + btnW, yPos + btnH, onBrightnessUp, "BR+");
+
+    uint16_t maxX = plusX + btnW + 4;
+    tft.fillRect(maxX, yPos, maxW, btnH, PANEL_COLOR);
+    tft.drawRect(maxX, yPos, maxW, btnH, SLIDER_COLOR);
+    tft.setTextColor(SLIDER_COLOR);
     tft.setTextSize(1);
-    tft.setTextColor(INFO_COLOR, BG_COLOR);
-    tft.setCursor(70, yPos);
-    tft.print("ESP32-2432S028R v1.0.0");
-    yPos += 20;
+    tft.setCursor(maxX + 8, yPos + 8);
+    tft.print("MAX");
+    addTouchZone(maxX, yPos, maxX + maxW, yPos + btnH, onBrightnessMax, "BRMAX");
 
-    tft.setTextColor(TEXT_COLOR, BG_COLOR);
-    tft.setCursor(40, yPos);
-    tft.print("Surveillance Detection System");
-    yPos += 15;
+    yPos += rowH;
 
-    tft.setCursor(60, yPos);
-    tft.print("ESP32-2432S028R");
-    yPos += 25;
+    // === Row 2: Sound Volume ===
+    uint16_t sndColor = soundEnabled ? SUCCESS_COLOR : ALERT_COLOR;
+    tft.fillRect(5, yPos, toggleW, btnH, soundEnabled ? 0x0320 : 0x4000);
+    tft.drawRect(5, yPos, toggleW, btnH, sndColor);
+    tft.setTextColor(TEXT_COLOR);
+    tft.setTextSize(1);
+    tft.setCursor(soundEnabled ? 17 : 14, yPos + 8);
+    tft.print(soundEnabled ? "ON" : "OFF");
+    addTouchZone(5, yPos, 5 + toggleW, yPos + btnH, onSoundToggle, "SND");
 
-    tft.setTextColor(WARNING_COLOR, BG_COLOR);
-    tft.setCursor(100, yPos);
-    tft.print("Hardware:");
-    yPos += 15;
+    tft.setTextColor(TEXT_COLOR);
+    tft.setCursor(55, yPos + 8);
+    tft.print("Sound:");
 
-    tft.setTextColor(TEXT_COLOR, BG_COLOR);
-    tft.setCursor(80, yPos);
-    tft.print("ESP32-WROOM-32");
-    yPos += 12;
-    tft.setCursor(70, yPos);
-    tft.print("2.8\" ILI9341 320x240");
-    yPos += 12;
-    tft.setCursor(70, yPos);
-    tft.print("XPT2046 Touch");
+    int sndPct = (soundVolume * 100) / 255;
+    tft.setTextColor(ACCENT_COLOR);
+    tft.setTextSize(2);
+    tft.setCursor(115, yPos + 4);
+    tft.printf("%3d%%", sndPct);
+
+    tft.fillRect(minusX, yPos, btnW, btnH, PANEL_COLOR);
+    tft.drawRect(minusX, yPos, btnW, btnH, ACCENT_COLOR);
+    tft.setTextColor(ACCENT_COLOR);
+    tft.setCursor(minusX + 11, yPos + 4);
+    tft.print("-");
+    addTouchZone(minusX, yPos, minusX + btnW, yPos + btnH, onSoundVolumeDown, "SND-");
+
+    tft.fillRect(plusX, yPos, btnW, btnH, PANEL_COLOR);
+    tft.drawRect(plusX, yPos, btnW, btnH, ACCENT_COLOR);
+    tft.setTextColor(ACCENT_COLOR);
+    tft.setCursor(plusX + 11, yPos + 4);
+    tft.print("+");
+    addTouchZone(plusX, yPos, plusX + btnW, yPos + btnH, onSoundVolumeUp, "SND+");
+
+    tft.fillRect(maxX, yPos, maxW, btnH, PANEL_COLOR);
+    tft.drawRect(maxX, yPos, maxW, btnH, ACCENT_COLOR);
+    tft.setTextColor(ACCENT_COLOR);
+    tft.setTextSize(1);
+    tft.setCursor(maxX + 8, yPos + 8);
+    tft.print("MAX");
+    addTouchZone(maxX, yPos, maxX + maxW, yPos + btnH, onSoundVolumeMax, "SNDMAX");
+
+    yPos += rowH;
+
+    // === Row 3: LED Brightness ===
+    uint16_t ledColor = ledAlertsEnabled ? SUCCESS_COLOR : ALERT_COLOR;
+    tft.fillRect(5, yPos, toggleW, btnH, ledAlertsEnabled ? 0x0320 : 0x4000);
+    tft.drawRect(5, yPos, toggleW, btnH, ledColor);
+    tft.setTextColor(TEXT_COLOR);
+    tft.setTextSize(1);
+    tft.setCursor(ledAlertsEnabled ? 17 : 14, yPos + 8);
+    tft.print(ledAlertsEnabled ? "ON" : "OFF");
+    addTouchZone(5, yPos, 5 + toggleW, yPos + btnH, onLedAlertToggle, "LED");
+
+    tft.setTextColor(TEXT_COLOR);
+    tft.setCursor(55, yPos + 8);
+    tft.print("LED:");
+
+    int rgbPct = (rgbBrightness * 100) / 255;
+    tft.setTextColor(ALERT_WARN);
+    tft.setTextSize(2);
+    tft.setCursor(115, yPos + 4);
+    tft.printf("%3d%%", rgbPct);
+
+    tft.fillRect(minusX, yPos, btnW, btnH, PANEL_COLOR);
+    tft.drawRect(minusX, yPos, btnW, btnH, ALERT_WARN);
+    tft.setTextColor(ALERT_WARN);
+    tft.setCursor(minusX + 11, yPos + 4);
+    tft.print("-");
+    addTouchZone(minusX, yPos, minusX + btnW, yPos + btnH, onRgbBrightnessDown, "RGB-");
+
+    tft.fillRect(plusX, yPos, btnW, btnH, PANEL_COLOR);
+    tft.drawRect(plusX, yPos, btnW, btnH, ALERT_WARN);
+    tft.setTextColor(ALERT_WARN);
+    tft.setCursor(plusX + 11, yPos + 4);
+    tft.print("+");
+    addTouchZone(plusX, yPos, plusX + btnW, yPos + btnH, onRgbBrightnessUp, "RGB+");
+
+    tft.fillRect(maxX, yPos, maxW, btnH, PANEL_COLOR);
+    tft.drawRect(maxX, yPos, maxW, btnH, ALERT_WARN);
+    tft.setTextColor(ALERT_WARN);
+    tft.setTextSize(1);
+    tft.setCursor(maxX + 8, yPos + 8);
+    tft.print("MAX");
+    addTouchZone(maxX, yPos, maxX + maxW, yPos + btnH, onRgbBrightnessMax, "RGBMAX");
+
+    yPos += rowH + 8;
+
+    // === Large CALIBRATE button ===
+    uint16_t calBtnW = 180, calBtnH = 28;
+    uint16_t calBtnX = (320 - calBtnW) / 2;
+    tft.fillRect(calBtnX, yPos, calBtnW, calBtnH, 0x0320);
+    tft.drawRect(calBtnX, yPos, calBtnW, calBtnH, LOGO_COLOR);
+    tft.setTextColor(LOGO_COLOR);
+    tft.setTextSize(2);
+    tft.setCursor(calBtnX + 28, yPos + 6);
+    tft.print("CALIBRATE");
+    addTouchZone(calBtnX, yPos, calBtnX + calBtnW, yPos + calBtnH, onCalibratePress, "CAL");
+
+    // Draw footer only
+    drawFooter();
 }
 
 void DisplayHandler::startCalibration() {
@@ -989,90 +1002,119 @@ void DisplayHandler::startCalibration() {
 }
 
 void DisplayHandler::drawCalibrationPage() {
-    tft.fillScreen(TFT_BLACK);
+    // FULL SCREEN calibration - no header/footer, targets at actual corners
+    tft.fillScreen(BG_COLOR);
 
-    uint16_t targetSize = 20;
-    uint16_t margin = 25;
-    uint16_t trX = 319 - margin;
-    uint16_t blY = 239 - margin;
+    // Target positions at actual screen corners
+    uint16_t margin = 20;
+    uint16_t targetSize = 15;
+    uint16_t targetX[] = {margin, (uint16_t)(319 - margin), margin, (uint16_t)(319 - margin)};
+    uint16_t targetY[] = {margin, margin, (uint16_t)(239 - margin), (uint16_t)(239 - margin)};
+    const char* shortLabels[] = {"TL", "TR", "BL", "BR"};
 
-    // Target positions: TL, TR, BL, BR
-    uint16_t targetX[] = {margin, trX, margin, trX};
-    uint16_t targetY[] = {margin, margin, blY, blY};
-    const char* targetLabels[] = {"TOP-LEFT", "TOP-RIGHT", "BOTTOM-LEFT", "BOTTOM-RIGHT"};
-
-    // Draw all targets dimmed
+    // Draw all 4 targets
     for (int i = 0; i < 4; i++) {
-        uint16_t color = (i < calStep) ? TFT_DARKGREEN : 0x4208;  // Done=green, waiting=dim
-        if (i == calStep) color = TFT_YELLOW;  // Current target = yellow
+        uint16_t color;
+        if (i < calStep) {
+            color = SUCCESS_COLOR;  // Completed = green
+        } else if (i == calStep) {
+            color = LOGO_COLOR;  // Current = orange/yellow
+        } else {
+            color = TEXT_DIM;  // Pending = dim
+        }
 
+        // Draw crosshair
         tft.drawLine(targetX[i] - targetSize, targetY[i], targetX[i] + targetSize, targetY[i], color);
         tft.drawLine(targetX[i], targetY[i] - targetSize, targetX[i], targetY[i] + targetSize, color);
 
-        if (i == calStep) {
-            tft.fillCircle(targetX[i], targetY[i], 5, TFT_YELLOW);
+        // Fill center dot for current target
+        if (i == calStep && calStep < 4) {
+            tft.fillCircle(targetX[i], targetY[i], 5, LOGO_COLOR);
+        } else if (i < calStep) {
+            tft.fillCircle(targetX[i], targetY[i], 4, SUCCESS_COLOR);
         }
+
+        // Label near each target
+        tft.setTextSize(1);
+        tft.setTextColor(color);
+        // Position labels outside the crosshairs
+        int labelX, labelY;
+        if (i == 0) { labelX = targetX[i] + targetSize + 3; labelY = targetY[i] - 3; }      // TL: right
+        else if (i == 1) { labelX = targetX[i] - targetSize - 12; labelY = targetY[i] - 3; } // TR: left
+        else if (i == 2) { labelX = targetX[i] + targetSize + 3; labelY = targetY[i] - 3; }  // BL: right
+        else { labelX = targetX[i] - targetSize - 12; labelY = targetY[i] - 3; }             // BR: left
+        tft.setCursor(labelX, labelY);
+        tft.print(shortLabels[i]);
     }
 
-    // Title
-    tft.setTextColor(TFT_WHITE);
+    // Center panel with instructions
+    uint16_t panelX = 60, panelY = 75;
+    uint16_t panelW = 200, panelH = 55;
+    tft.fillRect(panelX, panelY, panelW, panelH, PANEL_COLOR);
+    tft.drawRect(panelX, panelY, panelW, panelH, TEXT_COLOR);
+
+    tft.setTextColor(TEXT_COLOR);
     tft.setTextSize(1);
-    tft.setCursor(85, 80);
+    tft.setCursor(panelX + 35, panelY + 6);
     tft.print("TOUCH CALIBRATION");
 
-    // Instructions based on step
-    tft.setTextSize(2);
     if (calStep < 4) {
-        tft.setTextColor(TFT_YELLOW);
-        tft.setCursor(60, 100);
-        tft.printf("Tap %s", targetLabels[calStep]);
+        // Show current step instruction
+        tft.setTextColor(LOGO_COLOR);
+        tft.setTextSize(2);
+        const char* targetLabels[] = {"TOP-LEFT", "TOP-RIGHT", "BOT-LEFT", "BOT-RIGHT"};
+        int labelLen = strlen(targetLabels[calStep]);
+        int textX = panelX + (panelW - labelLen * 12) / 2;
+        tft.setCursor(textX, panelY + 20);
+        tft.print(targetLabels[calStep]);
 
-        // Progress indicator
+        // Progress
+        tft.setTextColor(TEXT_DIM);
         tft.setTextSize(1);
-        tft.setTextColor(TFT_WHITE);
-        tft.setCursor(130, 125);
-        tft.printf("Step %d/4", calStep + 1);
+        tft.setCursor(panelX + 65, panelY + 42);
+        tft.printf("Step %d of 4", calStep + 1);
     } else {
-        tft.setTextColor(TFT_GREEN);
-        tft.setCursor(45, 100);
-        tft.print("Calibration OK!");
+        // Calibration complete
+        tft.setTextColor(SUCCESS_COLOR);
+        tft.setTextSize(2);
+        tft.setCursor(panelX + 30, panelY + 20);
+        tft.print("COMPLETE!");
 
+        tft.setTextColor(TEXT_DIM);
         tft.setTextSize(1);
-        tft.setTextColor(TFT_WHITE);
-        tft.setCursor(100, 125);
+        tft.setCursor(panelX + 40, panelY + 42);
         tft.print("Tap SAVE to apply");
     }
 
-    // Button row at bottom (above the corner targets)
-    uint16_t btnW = 90, btnH = 28, btnY = 150;
+    // Button row
+    uint16_t btnW = 90, btnH = 28, btnY = 145;
 
-    // CANCEL button (always visible, left side)
-    uint16_t cancelX = 40;
-    tft.fillRect(cancelX, btnY, btnW, btnH, 0x4000);  // Dark red
-    tft.drawRect(cancelX, btnY, btnW, btnH, TFT_RED);
-    tft.setTextColor(TFT_WHITE);
-    tft.setTextSize(2);
-    tft.setCursor(cancelX + 8, btnY + 6);
+    // CANCEL button (left)
+    uint16_t cancelX = 55;
+    tft.fillRect(cancelX, btnY, btnW, btnH, 0x4000);
+    tft.drawRect(cancelX, btnY, btnW, btnH, ALERT_COLOR);
+    tft.setTextColor(TEXT_COLOR);
+    tft.setTextSize(1);
+    tft.setCursor(cancelX + 24, btnY + 10);
     tft.print("CANCEL");
+    addTouchZone(cancelX, btnY, cancelX + btnW, btnY + btnH, onSettingsButtonPress, "CANCEL");
 
-    // SAVE button (only when done, right side)
-    uint16_t saveX = 190;
+    // SAVE button (right)
+    uint16_t saveX = 175;
     if (calStep >= 4) {
-        tft.fillRect(saveX, btnY, btnW, btnH, 0x0320);  // Dark green
-        tft.drawRect(saveX, btnY, btnW, btnH, TFT_GREEN);
-        tft.setTextColor(TFT_WHITE);
-        tft.setCursor(saveX + 18, btnY + 6);
+        tft.fillRect(saveX, btnY, btnW, btnH, 0x0320);
+        tft.drawRect(saveX, btnY, btnW, btnH, SUCCESS_COLOR);
+        tft.setTextColor(TEXT_COLOR);
+        tft.setCursor(saveX + 30, btnY + 10);
         tft.print("SAVE");
+        addTouchZone(saveX, btnY, saveX + btnW, btnY + btnH, onCalibrateSave, "SAVE");
     } else {
-        // Dimmed placeholder
-        tft.fillRect(saveX, btnY, btnW, btnH, 0x2104);  // Very dark gray
-        tft.drawRect(saveX, btnY, btnW, btnH, 0x4208);
-        tft.setTextColor(0x4208);
-        tft.setCursor(saveX + 18, btnY + 6);
+        tft.fillRect(saveX, btnY, btnW, btnH, PANEL_COLOR);
+        tft.drawRect(saveX, btnY, btnW, btnH, TEXT_DIM);
+        tft.setTextColor(TEXT_DIM);
+        tft.setCursor(saveX + 30, btnY + 10);
         tft.print("SAVE");
     }
-
-    clearTouchZones();
 }
 
 void DisplayHandler::processCalibrationTouch(uint16_t rawX, uint16_t rawY) {
@@ -1085,12 +1127,15 @@ void DisplayHandler::processCalibrationTouch(uint16_t rawX, uint16_t rawY) {
         if (calStep >= 4) {
             // All corners captured, validate
             if (!validateAndApplyCalibration()) {
-                // Invalid calibration, show error and restart
-                tft.fillRect(50, 150, 220, 30, TFT_RED);
-                tft.setTextColor(TFT_WHITE);
+                // Invalid calibration, show error in center panel area
+                uint16_t panelX = 60, panelY = 105;
+                tft.fillRect(panelX, panelY, 200, 50, ALERT_COLOR);
+                tft.setTextColor(TEXT_COLOR);
                 tft.setTextSize(1);
-                tft.setCursor(60, 160);
-                tft.print("Bad calibration! Restarting...");
+                tft.setCursor(panelX + 10, panelY + 10);
+                tft.print("Calibration invalid!");
+                tft.setCursor(panelX + 30, panelY + 28);
+                tft.print("Restarting...");
                 delay(2000);
                 startCalibration();
                 return;
@@ -1523,12 +1568,12 @@ void DisplayHandler::setPage(DisplayPage page) {
 }
 
 void DisplayHandler::nextPage() {
-    currentPage = (DisplayPage)((currentPage + 1) % 5);
+    currentPage = (DisplayPage)((currentPage + 1) % 4);  // 4 main pages (0-3)
     clear();
 }
 
 void DisplayHandler::previousPage() {
-    currentPage = (DisplayPage)((currentPage + 4) % 5);
+    currentPage = (DisplayPage)((currentPage + 3) % 4);  // 4 main pages (0-3)
     clear();
 }
 
@@ -1828,6 +1873,80 @@ void DisplayHandler::showDebugBLE(String name, String mac, int8_t rssi) {
     (void)name;
     (void)mac;
     (void)rssi;
+}
+
+// === Speaker Functions ===
+void DisplayHandler::setupSpeaker() {
+    ledcSetup(SPEAKER_CHANNEL, 2000, 8);  // Channel 5, 2kHz default, 8-bit
+    ledcAttachPin(SPEAKER_PIN, SPEAKER_CHANNEL);
+    ledcWrite(SPEAKER_CHANNEL, 0);  // Start silent
+    Serial.println("Speaker initialized on GPIO 26");
+}
+
+void DisplayHandler::playTone(uint16_t frequency, uint16_t duration) {
+    if (!soundEnabled) return;
+
+    // Scale volume (0-255) to duty cycle (0-127 for audible range)
+    uint8_t duty = (soundVolume * 64) / 255;
+
+    ledcWriteTone(SPEAKER_CHANNEL, frequency);
+    ledcWrite(SPEAKER_CHANNEL, duty);
+    delay(duration);
+    ledcWrite(SPEAKER_CHANNEL, 0);  // Stop tone
+}
+
+void DisplayHandler::playBootTone() {
+    if (!soundEnabled) return;
+
+    // Play boot tone at fixed 20% volume regardless of setting
+    uint8_t savedVolume = soundVolume;
+    soundVolume = 51;  // 20% of 255
+
+    // Play a short ascending tone sequence
+    playTone(880, 80);   // A5
+    delay(30);
+    playTone(1175, 80);  // D6
+    delay(30);
+    playTone(1760, 120); // A6
+
+    soundVolume = savedVolume;  // Restore user's volume
+}
+
+void DisplayHandler::toggleSound() {
+    soundEnabled = !soundEnabled;
+    if (soundEnabled) {
+        playTone(1000, 50);  // Quick beep to confirm
+    }
+    needsRedraw = true;
+}
+
+void DisplayHandler::setSoundVolume(uint8_t level) {
+    soundVolume = level;
+    needsRedraw = true;
+}
+
+void DisplayHandler::increaseSoundVolume() {
+    if (soundVolume <= 230) {
+        soundVolume += 25;
+    } else {
+        soundVolume = 255;
+    }
+    if (soundEnabled) {
+        playTone(1000, 30);  // Quick feedback beep
+    }
+    needsRedraw = true;
+}
+
+void DisplayHandler::decreaseSoundVolume() {
+    if (soundVolume >= 50) {
+        soundVolume -= 25;
+    } else {
+        soundVolume = 25;  // Minimum 10%
+    }
+    if (soundEnabled) {
+        playTone(800, 30);  // Quick feedback beep
+    }
+    needsRedraw = true;
 }
 
 #endif // CYD_DISPLAY
