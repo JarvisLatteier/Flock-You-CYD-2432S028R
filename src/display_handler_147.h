@@ -2,14 +2,17 @@
  * @file display_handler_147.h
  * @brief Display UI for Waveshare ESP32-S3-LCD-1.47 (172x320 ST7789)
  *
- * Single-page dashboard optimized for small screen without touch.
- * Auto-scrolling detection list, animated stats display.
+ * 4-page navigation using BOOT button (GPIO 0):
+ * - Short press: cycle pages (HOME -> LIST -> STATS -> CONFIG)
+ * - Long press: adjust settings (on CONFIG page) or toggle LED
+ *
+ * Settings persistence to SD card (/settings.txt).
  *
  * Hardware notes:
  * - Display: ST7789 172x320 on SPI (MOSI=45, SCLK=40, CS=42, DC=41, RST=39, BL=48)
  * - RGB LED: WS2812 addressable on GPIO 38
  * - SD Card: SDMMC interface (CMD=15, CLK=14, D0=16, D1=18, D2=17, D3=21)
- * - No touch controller
+ * - Boot button: GPIO 0 (active LOW)
  */
 
 #ifndef DISPLAY_HANDLER_147_H
@@ -29,6 +32,14 @@
 #define RGB_LED_PIN 38
 #define NUM_LEDS 1
 
+// Boot button (GPIO 0)
+#define BOOT_BUTTON_PIN 0
+#define LONG_PRESS_MS 500
+#define DEBOUNCE_MS 50
+
+// Settings persistence
+#define SETTINGS_FILE "/settings.txt"
+
 // Modern dark theme color scheme (RGB565)
 #define BG_COLOR      0x0841          // Deep charcoal
 #define BG_DARK       0x0000          // Pure black
@@ -43,11 +54,18 @@
 #define FOOTER_COLOR  0x0861          // Slightly lighter footer
 #define ACCENT_COLOR  0x04FF          // Blue accent
 
-// Display zones (172x320)
-#define HEADER_HEIGHT 24
-#define FOOTER_HEIGHT 20
-#define STAT_BOX_HEIGHT 50
-#define LIST_ITEM_HEIGHT 28
+// Display zones (320x172 landscape with padding for curved corners)
+#define SCREEN_WIDTH 320
+#define SCREEN_HEIGHT 172
+#define PADDING 8
+#define CONTENT_X PADDING
+#define CONTENT_Y PADDING
+#define CONTENT_WIDTH (SCREEN_WIDTH - PADDING * 2)
+#define CONTENT_HEIGHT (SCREEN_HEIGHT - PADDING * 2)
+#define HEADER_HEIGHT 18
+#define FOOTER_HEIGHT 14
+#define STAT_BOX_HEIGHT 38
+#define LIST_ITEM_HEIGHT 22
 
 class DisplayHandler {
 private:
@@ -58,6 +76,15 @@ private:
     bool needsRedraw;
     uint32_t lastUpdate;
     uint8_t brightness;
+    uint8_t currentPage;
+
+    // Button handling
+    bool buttonPressed;
+    uint32_t buttonPressTime;
+    bool longPressHandled;
+    bool adjustMode;            // true = adjusting settings
+    uint8_t settingsSelection;  // 0=display, 1=LED, 2=exit
+    void handleButton();
 
     // Detection data
     struct Detection {
@@ -67,6 +94,7 @@ private:
         int8_t rssi;
         String type;
         uint32_t timestamp;
+        uint16_t hitCount;
         bool isNew;
     };
 
@@ -74,6 +102,15 @@ private:
     uint32_t totalDetections;
     uint32_t flockDetections;
     uint32_t bleDetections;
+
+    // Stats tracking
+    int8_t closestThreatRssi;       // Strongest threat RSSI (closest)
+    uint32_t lastThreatTime;        // millis() of last threat
+    bool hadThreat;                 // Whether any threat was ever seen
+    uint16_t channelCounts[14];     // Detection count per channel (1-13)
+
+    // Threat log (never evicted, kept separate from rolling detection list)
+    std::vector<Detection> threats;
 
     // Auto-scroll state
     int scrollOffset;
@@ -92,8 +129,13 @@ private:
     void checkSDCard();
 
     // Brightness control (PWM for backlight)
+    uint8_t rgbBrightness;  // RGB LED brightness (0-255)
     void setupBacklightPWM();
     void applyBrightness();
+
+    // Settings persistence
+    bool loadSettings();
+    bool saveSettings();
 
     // OUI lookup
     String lookupOUI(const String& mac);
@@ -103,6 +145,8 @@ private:
     // LED control
     uint8_t ledState;  // 0=off, 1=scanning, 2=detection, 3=alert
     uint32_t lastLedUpdate;
+    uint32_t lastDetectionTime;   // When last detection LED was triggered
+    uint32_t alertStartTime;      // When alert (orange) state began
     bool ledFlashState;
     int8_t detectionRssi;
     void updateLED();
@@ -115,14 +159,31 @@ private:
     void drawDetectionList();
     void drawLatestDetection();
     void drawSignalBars(uint16_t x, uint16_t y, int8_t rssi);
+    void drawSettingsPage();
+    void drawFullStatsList();
 
 public:
+    enum DisplayPage {
+        PAGE_MAIN = 0,
+        PAGE_LIST,
+        PAGE_STATS,
+        PAGE_SETTINGS,
+        PAGE_COUNT
+    };
+
     DisplayHandler();
     bool begin();
     void update();
     void clear();
     void setBrightness(uint8_t level);
     uint8_t getBrightness() { return brightness; }
+    void setRgbBrightness(uint8_t level);
+    uint8_t getRgbBrightness() { return rgbBrightness; }
+
+    // Page navigation
+    void nextPage();
+    void setPage(DisplayPage page);
+    DisplayPage getCurrentPage() { return (DisplayPage)currentPage; }
 
     // SD Card
     bool initSDCard();
