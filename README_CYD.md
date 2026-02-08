@@ -117,6 +117,28 @@ The XPT2046 touch controller is on a **separate HSPI bus** - this is critical an
 - Sound toggle and volume control (0-100%)
 - Speaker connected to GPIO 26 (SPEAK P4 connector)
 
+### Detection Engine (both boards)
+
+**WiFi Frame Capture:**
+- Probe requests (devices scanning for networks)
+- Probe responses (APs responding to scans)
+- Beacons (APs advertising their network)
+
+**BLE Scanning:**
+- Device name pattern matching
+- MAC prefix matching
+
+**TrackedDevice System:**
+- Per-device metadata: RSSI min/max/avg, hit count, probe intervals, channel, timing
+- Detection TTL (5 min): devices are re-reported after 5 minutes of silence
+- Channel memory: sticky channel (5s) after detection + detection-weighted dwell time
+- Enriched JSON serial output with signal trending (`stable`, `moderate`, `moving`)
+
+**Buffered SD Logging (CYD):**
+- Async batch writes every 5 seconds (no SD I/O in detection pipeline)
+- Session tracking with random session ID per boot
+- Enriched CSV: timestamp, session, SSID, MAC, vendor, RSSI, type, RSSI min/max/avg, hits, probe interval, channel
+
 ### RGB LED Alert System (both boards)
 The RGB LED provides visual status at a glance:
 
@@ -156,7 +178,7 @@ Manual recalibration available via CALIBRATE button on CONFIG page.
 |------|-------|---------|
 | `touch_cal.txt` | CYD | Touch calibration data (4 values) |
 | `settings.txt` | Both | Persistent settings (brightness, LED) |
-| `flockyou_detections.csv` | Both | Detection log with timestamp, SSID, MAC, vendor, RSSI, type |
+| `flockyou_detections.csv` | Both | Detection log (CYD: enriched with session, RSSI stats, probe intervals, channel) |
 
 **Quick setup:**
 1. Format SD card as FAT32
@@ -369,3 +391,4 @@ This tool is for educational and research purposes only. Users must comply with 
 - Detection patterns from [DeFlock](https://deflock.me) crowdsourced database
 - Hardware analysis and adaptation for ESP32-2432S028R
 - Inspired by the work of fuzzzy-kyle, [Flock You - CYD](https://github.com/fuzzzy-kyle/flock-you-cyd)
+- 802.11 frame type reference by Jeremy Sharp: [802.11 Frame Types and Formats](https://howiwifi.com/2020/07/13/802-11-frame-types-and-formats/)

@@ -56,6 +56,9 @@ DisplayHandler::DisplayHandler() : tft(), touchSPI(HSPI) {
     sdCardPresent = false;
     detectionsLogged = 0;
     lastSdCheck = 0;
+    pendingLogCount = 0;
+    lastFlushTime = 0;
+    sessionId = 0;
     autoBrightness = false;
     rgbBrightness = 128;  // 50% default
     lastLdrRead = 0;
@@ -84,6 +87,9 @@ bool DisplayHandler::begin() {
     digitalWrite(TOUCH_CS, HIGH);
     pinMode(TOUCH_IRQ, INPUT);  // GPIO36 is input-only, no pullup
     touchSPI.begin(TOUCH_CLK, TOUCH_MISO, TOUCH_MOSI, TOUCH_CS);
+
+    // Generate session ID
+    sessionId = esp_random();
 
     // Initialize SD Card
     sdCardPresent = initSDCard();
@@ -223,6 +229,11 @@ bool DisplayHandler::begin() {
 
 void DisplayHandler::update() {
     uint32_t now = millis();
+
+    // Flush buffered logs every 5 seconds
+    if (now - lastFlushTime > 5000) {
+        flushLogs();
+    }
 
     // Check SD card status periodically (every 5 seconds)
     checkSDCard();
@@ -1504,7 +1515,7 @@ String DisplayHandler::lookupOUI(const String& mac) {
     return "Unknown";
 }
 
-void DisplayHandler::addDetection(String ssid, String mac, int8_t rssi, String type) {
+void DisplayHandler::addDetection(String ssid, String mac, int8_t rssi, String type, TrackedDevice* dev) {
     Detection det;
     det.ssid = ssid;
     det.mac = mac;
@@ -1532,8 +1543,38 @@ void DisplayHandler::addDetection(String ssid, String mac, int8_t rssi, String t
         bleDetections++;
     }
 
-    // Log to SD card
-    logDetection(ssid, mac, rssi, type);
+    // Build and queue log entry (vendor already computed above)
+    LogEntry log;
+    log.timestamp = millis() / 1000;
+    strncpy(log.ssid, ssid.c_str(), 32);
+    log.ssid[32] = '\0';
+    strncpy(log.mac, mac.c_str(), 17);
+    log.mac[17] = '\0';
+    strncpy(log.vendor, det.vendor.c_str(), 23);
+    log.vendor[23] = '\0';
+    log.rssi = rssi;
+    strncpy(log.type, type.c_str(), 19);
+    log.type[19] = '\0';
+
+    // Fill enriched fields from TrackedDevice if available
+    if (dev) {
+        log.rssi_min = dev->rssi_min;
+        log.rssi_max = dev->rssi_max;
+        log.rssi_avg = dev->hit_count > 0 ? (int8_t)(dev->rssi_sum / dev->hit_count) : rssi;
+        log.hit_count = dev->hit_count;
+        log.avg_probe_interval = dev->probe_intervals > 0 ?
+            dev->probe_interval_sum / dev->probe_intervals : 0;
+        log.channel = dev->last_channel;
+    } else {
+        log.rssi_min = rssi;
+        log.rssi_max = rssi;
+        log.rssi_avg = rssi;
+        log.hit_count = 1;
+        log.avg_probe_interval = 0;
+        log.channel = 0;
+    }
+
+    queueLog(log);
 
     needsRedraw = true;
 }
@@ -1721,9 +1762,18 @@ bool DisplayHandler::initSDCard() {
     if (!SD.exists(logFileName)) {
         File file = SD.open(logFileName, FILE_WRITE);
         if (file) {
-            file.println("timestamp,ssid,mac,vendor,rssi,type");
+            file.println("timestamp,session,ssid,mac,vendor,rssi,type,rssi_min,rssi_max,rssi_avg,hits,probe_interval,channel");
             file.close();
             Serial.println("SD Card: Created log file");
+        }
+    }
+
+    // Write session start marker
+    {
+        File file = SD.open(logFileName, FILE_APPEND);
+        if (file) {
+            file.printf("# session %u started at boot\n", sessionId);
+            file.close();
         }
     }
 
@@ -1765,7 +1815,7 @@ void DisplayHandler::checkSDCard() {
                 if (!SD.exists(logFileName)) {
                     File file = SD.open(logFileName, FILE_WRITE);
                     if (file) {
-                        file.println("timestamp,ssid,mac,vendor,rssi,type");
+                        file.println("timestamp,session,ssid,mac,vendor,rssi,type,rssi_min,rssi_max,rssi_avg,hits,probe_interval,channel");
                         file.close();
                     }
                 }
@@ -1780,26 +1830,35 @@ void DisplayHandler::checkSDCard() {
     }
 }
 
-void DisplayHandler::logDetection(const String& ssid, const String& mac, int8_t rssi, const String& type) {
-    if (!sdCardPresent) return;
+void DisplayHandler::queueLog(const LogEntry& entry) {
+    if (pendingLogCount < MAX_PENDING_LOGS) {
+        pendingLogs[pendingLogCount++] = entry;
+    }
+    // If buffer full, oldest entries get dropped (rare — flush every 5s)
+}
+
+void DisplayHandler::flushLogs() {
+    if (pendingLogCount == 0 || !sdCardPresent) {
+        lastFlushTime = millis();
+        return;
+    }
 
     File file = SD.open(logFileName, FILE_APPEND);
     if (file) {
-        // Lookup vendor for logging
-        String vendor = lookupOUI(mac);
-
-        // Format: timestamp,ssid,mac,vendor,rssi,type
-        file.printf("%lu,\"%s\",%s,\"%s\",%d,%s\n",
-            millis() / 1000,  // seconds since boot
-            ssid.c_str(),
-            mac.c_str(),
-            vendor.c_str(),
-            rssi,
-            type.c_str()
-        );
+        for (uint8_t i = 0; i < pendingLogCount; i++) {
+            LogEntry& e = pendingLogs[i];
+            file.printf("%lu,%u,\"%s\",%s,\"%s\",%d,%s,%d,%d,%d,%u,%u,%u\n",
+                e.timestamp, sessionId,
+                e.ssid, e.mac, e.vendor,
+                e.rssi, e.type,
+                e.rssi_min, e.rssi_max, e.rssi_avg,
+                e.hit_count, e.avg_probe_interval, e.channel);
+        }
         file.close();
-        detectionsLogged++;
+        detectionsLogged += pendingLogCount;
+        pendingLogCount = 0;
     }
+    lastFlushTime = millis();
 }
 
 bool DisplayHandler::loadCalibration() {

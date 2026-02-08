@@ -23,6 +23,7 @@
 #include <stdint.h>
 #include "esp_wifi.h"
 #include "esp_wifi_types.h"
+#include "esp_task_wdt.h"
 
 #ifdef CYD_DISPLAY
 #include "display_handler_28.h"
@@ -88,11 +89,9 @@ static int8_t   led_detection_rssi = -100;  // Signal strength for flash rate
 
 // WiFi Promiscuous Mode Configuration
 #define MAX_CHANNEL 13
-#define CHANNEL_HOP_INTERVAL 1000  // milliseconds (increased for better detection)
-
 // BLE SCANNING CONFIGURATION
 #define BLE_SCAN_DURATION 1    // Seconds
-#define BLE_SCAN_INTERVAL 5000 // Milliseconds between scans
+#define BLE_SCAN_INTERVAL 2000 // Milliseconds between scans (was 5000)
 static unsigned long last_ble_scan = 0;
 
 // Detection Pattern Limits
@@ -152,14 +151,76 @@ static uint32_t total_ssids_seen = 0;
 static unsigned long last_heartbeat = 0;
 static NimBLEScan* pBLEScan;
 
-// Deduplication: Track detected devices by MAC address
-#define MAX_DETECTED_DEVICES 50
-struct DetectedDevice {
-    uint8_t mac[6];
-    bool active;
+// Tracked device table: FNV-1a hash + per-device metadata
+#define MAX_TRACKED 64
+#define MAX_TRACKED_MASK (MAX_TRACKED - 1)
+#define HASH_MAX_PROBE 8
+#define DETECTION_TTL 300000  // 5 minutes — re-detect after this
+
+// TrackedDevice struct defined in display_handler_28.h when CYD_DISPLAY is set
+#ifndef CYD_DISPLAY
+struct TrackedDevice {
+    uint32_t mac_hash;           // FNV-1a hash (0 = empty slot)
+    uint8_t  mac[6];             // Full MAC for display/logging
+    int8_t   rssi_min;           // Weakest signal seen
+    int8_t   rssi_max;           // Strongest signal seen
+    int8_t   rssi_last;          // Most recent RSSI
+    int32_t  rssi_sum;           // Running sum for average
+    uint16_t hit_count;          // Total detections
+    uint8_t  last_channel;       // Channel last seen on
+    uint8_t  type;               // Last detection type
+    uint32_t first_seen;         // millis() of first detection
+    uint32_t last_seen;          // millis() of most recent detection
+    uint32_t probe_interval_sum; // Sum of inter-detection intervals (ms)
+    uint16_t probe_intervals;    // Count of intervals measured
 };
-static DetectedDevice detected_devices[MAX_DETECTED_DEVICES] = {0};
-static uint32_t detected_device_count = 0;
+#endif
+
+static TrackedDevice tracked_devices[MAX_TRACKED] = {};
+static uint32_t hash_entries = 0;
+static uint32_t hash_collisions = 0;
+
+// Channel memory: detection-aware channel biasing
+static uint8_t  channel_detections[14] = {0};   // Matched detections per channel (lifetime)
+static volatile uint32_t channel_sticky_until = 0;  // millis() — stay on current channel
+#define CHANNEL_STICKY_DURATION 5000             // 5s sticky after detection
+#define CHANNEL_DETECTION_BONUS 500              // Extra ms dwell per past detection
+#define CHANNEL_MAX_DWELL 3000                   // Cap total dwell time
+
+// FNV-1a hash of 6-byte MAC address
+static uint32_t fnv1a_mac(const uint8_t* mac) {
+    uint32_t hash = 2166136261u;  // FNV offset basis
+    for (int i = 0; i < 6; i++) {
+        hash ^= mac[i];
+        hash *= 16777619u;  // FNV prime
+    }
+    // Ensure hash is never 0 (0 = empty slot sentinel)
+    return hash ? hash : 1;
+}
+
+// FreeRTOS queue for detection events
+struct DetectionEvent {
+    uint8_t mac[6];
+    char ssid[33];        // WiFi SSID or BLE name
+    int8_t rssi;
+    uint8_t channel;
+    uint8_t type;         // 0=probe, 1=beacon, 2=ble_mac, 3=ble_name
+};
+
+static QueueHandle_t detectionQueue = NULL;
+static TaskHandle_t processingTaskHandle = NULL;
+static SemaphoreHandle_t displayMutex = NULL;
+static uint32_t events_processed = 0;
+static uint32_t events_dropped = 0;
+static volatile bool pending_beep = false;  // Signal Core 1 to play detection beep
+
+// Adaptive channel dwell
+static volatile uint16_t channel_activity[14] = {0};  // frames per channel in current dwell
+#define CHANNEL_DWELL_BASE    200   // ms - fast sweep of quiet channels
+#define CHANNEL_DWELL_ACTIVE  800   // ms - stay longer on active channels
+#define CHANNEL_DWELL_HIGH   1500   // ms - stay longest on very active channels
+#define CHANNEL_ACTIVE_THRESHOLD  5
+#define CHANNEL_HIGH_THRESHOLD   20
 
 
 
@@ -239,7 +300,11 @@ void led_flash_trigger(int8_t rssi) {
     led_flash_on = true;
     led_last_toggle = millis();
 #ifdef WAVESHARE_147
-    display.setLEDDetection(rssi);
+    // Mutex already held by caller (processingTask) or acquired here
+    if (displayMutex && xSemaphoreTake(displayMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        display.setLEDDetection(rssi);
+        xSemaphoreGive(displayMutex);
+    }
 #else
     rgb_pwm(255, 0, 0);  // Immediate red flash
 #endif
@@ -268,14 +333,20 @@ void led_flash_update(void) {
 
 #ifdef WAVESHARE_147
     // Waveshare LED is handled by display handler's update() method
-    // Just track state transitions here
+    // Just track state transitions here (called from loop on Core 1)
     if (led_state == LED_DETECTED && now - led_detection_time >= 5000) {
         led_state = LED_ALERT;
-        display.setLEDAlert();
+        if (xSemaphoreTake(displayMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+            display.setLEDAlert();
+            xSemaphoreGive(displayMutex);
+        }
     }
     if (led_state == LED_ALERT && now - led_detection_time >= LED_ALERT_TIMEOUT) {
         led_state = LED_SCANNING;
-        display.setLEDScanning();
+        if (xSemaphoreTake(displayMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+            display.setLEDScanning();
+            xSemaphoreGive(displayMutex);
+        }
     }
     return;
 #endif
@@ -360,7 +431,7 @@ void heartbeat_pulse()
 // JSON OUTPUT FUNCTIONS
 // ============================================================================
 
-void output_wifi_detection_json(const char* ssid, const uint8_t* mac, int rssi, const char* detection_type)
+void output_wifi_detection_json(const char* ssid, const uint8_t* mac, int rssi, const char* detection_type, TrackedDevice* dev = nullptr)
 {
     DynamicJsonDocument doc(2048);
 
@@ -386,20 +457,27 @@ void output_wifi_detection_json(const char* ssid, const uint8_t* mac, int rssi, 
     doc["mac_address"] = mac_str;
 
 #ifdef HAS_DISPLAY
-    // Add detection to display
-    display.addDetection(String(ssid), String(mac_str), rssi, String(detection_type));
+    // Add detection to display (mutex for thread safety with Core 1 display.update())
+    if (xSemaphoreTake(displayMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+#ifdef CYD_DISPLAY
+        display.addDetection(String(ssid), String(mac_str), rssi, String(detection_type), dev);
+#else
+        display.addDetection(String(ssid), String(mac_str), rssi, String(detection_type));
 #endif
-    
+        xSemaphoreGive(displayMutex);
+    }
+#endif
+
     char mac_prefix[9];
     snprintf(mac_prefix, sizeof(mac_prefix), "%02x:%02x:%02x", mac[0], mac[1], mac[2]);
     doc["mac_prefix"] = mac_prefix;
     doc["vendor_oui"] = mac_prefix;
-    
+
     // Detection pattern matching
     bool ssid_match = false;
     bool mac_match = false;
-    
-    for (int i = 0; i < sizeof(wifi_ssid_patterns)/sizeof(wifi_ssid_patterns[0]); i++) {
+
+    for (size_t i = 0; i < sizeof(wifi_ssid_patterns)/sizeof(wifi_ssid_patterns[0]); i++) {
         if (strcasestr(ssid, wifi_ssid_patterns[i])) {
             doc["matched_ssid_pattern"] = wifi_ssid_patterns[i];
             doc["ssid_match_confidence"] = "HIGH";
@@ -407,8 +485,8 @@ void output_wifi_detection_json(const char* ssid, const uint8_t* mac, int rssi, 
             break;
         }
     }
-    
-    for (int i = 0; i < sizeof(mac_prefixes)/sizeof(mac_prefixes[0]); i++) {
+
+    for (size_t i = 0; i < sizeof(mac_prefixes)/sizeof(mac_prefixes[0]); i++) {
         if (strncasecmp(mac_prefix, mac_prefixes[i], 8) == 0) {
             doc["matched_mac_pattern"] = mac_prefixes[i];
             doc["mac_match_confidence"] = "HIGH";
@@ -416,34 +494,57 @@ void output_wifi_detection_json(const char* ssid, const uint8_t* mac, int rssi, 
             break;
         }
     }
-    
+
     // Detection summary
     doc["detection_criteria"] = ssid_match && mac_match ? "SSID_AND_MAC" : (ssid_match ? "SSID_ONLY" : "MAC_ONLY");
     doc["threat_score"] = ssid_match && mac_match ? 100 : (ssid_match || mac_match ? 85 : 70);
-    
+
     // Frame type details
     if (strcmp(detection_type, "probe_request") == 0 || strcmp(detection_type, "probe_request_mac") == 0) {
         doc["frame_type"] = "PROBE_REQUEST";
         doc["frame_description"] = "Device actively scanning for networks";
+    } else if (strcmp(detection_type, "probe_response") == 0 || strcmp(detection_type, "probe_response_mac") == 0) {
+        doc["frame_type"] = "PROBE_RESPONSE";
+        doc["frame_description"] = "Device responding to network scan";
     } else {
         doc["frame_type"] = "BEACON";
         doc["frame_description"] = "Device advertising its network";
     }
-    
+
+    // Enriched tracking data
+    if (dev) {
+        doc["rssi_min"] = dev->rssi_min;
+        doc["rssi_max"] = dev->rssi_max;
+        doc["rssi_avg"] = dev->hit_count > 0 ? (int)(dev->rssi_sum / dev->hit_count) : rssi;
+        doc["hit_count"] = dev->hit_count;
+        if (dev->probe_intervals > 0) {
+            doc["avg_probe_interval_ms"] = dev->probe_interval_sum / dev->probe_intervals;
+        }
+        int8_t range = dev->rssi_max - dev->rssi_min;
+        doc["signal_trend"] = range < 10 ? "stable" : (range < 20 ? "moderate" : "moving");
+    }
+
     String json_output;
     serializeJson(doc, json_output);
     Serial.println(json_output);
 }
 
-void output_ble_detection_json(const char* mac, const char* name, int rssi, const char* detection_method)
+void output_ble_detection_json(const char* mac, const char* name, int rssi, const char* detection_method, TrackedDevice* dev = nullptr)
 {
 #ifdef HAS_DISPLAY
-    // Add BLE detection to display
-    display.addDetection(name ? String(name) : "Unknown", String(mac), rssi, "BLE");
+    // Add BLE detection to display (mutex for thread safety with Core 1 display.update())
+    if (xSemaphoreTake(displayMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+#ifdef CYD_DISPLAY
+        display.addDetection(name ? String(name) : "Unknown", String(mac), rssi, "BLE", dev);
+#else
+        display.addDetection(name ? String(name) : "Unknown", String(mac), rssi, "BLE");
+#endif
+        xSemaphoreGive(displayMutex);
+    }
 #endif
 
     DynamicJsonDocument doc(2048);
-    
+
     // Core detection info
     doc["timestamp"] = millis();
     doc["detection_time"] = String(millis() / 1000.0, 3) + "s";
@@ -451,12 +552,12 @@ void output_ble_detection_json(const char* mac, const char* name, int rssi, cons
     doc["detection_method"] = detection_method;
     doc["alert_level"] = "HIGH";
     doc["device_category"] = "FLOCK_SAFETY";
-    
+
     // BLE specific info
     doc["mac_address"] = mac;
     doc["rssi"] = rssi;
     doc["signal_strength"] = rssi > -50 ? "STRONG" : (rssi > -70 ? "MEDIUM" : "WEAK");
-    
+
     // Device name info
     if (name && strlen(name) > 0) {
         doc["device_name"] = name;
@@ -467,20 +568,20 @@ void output_ble_detection_json(const char* mac, const char* name, int rssi, cons
         doc["device_name_length"] = 0;
         doc["has_device_name"] = false;
     }
-    
+
     // MAC address analysis
     char mac_prefix[9];
     strncpy(mac_prefix, mac, 8);
     mac_prefix[8] = '\0';
     doc["mac_prefix"] = mac_prefix;
     doc["vendor_oui"] = mac_prefix;
-    
+
     // Detection pattern matching
     bool name_match = false;
     bool mac_match = false;
-    
+
     // Check MAC prefix patterns
-    for (int i = 0; i < sizeof(mac_prefixes)/sizeof(mac_prefixes[0]); i++) {
+    for (size_t i = 0; i < sizeof(mac_prefixes)/sizeof(mac_prefixes[0]); i++) {
         if (strncasecmp(mac, mac_prefixes[i], strlen(mac_prefixes[i])) == 0) {
             doc["matched_mac_pattern"] = mac_prefixes[i];
             doc["mac_match_confidence"] = "HIGH";
@@ -488,10 +589,10 @@ void output_ble_detection_json(const char* mac, const char* name, int rssi, cons
             break;
         }
     }
-    
+
     // Check device name patterns
     if (name && strlen(name) > 0) {
-        for (int i = 0; i < sizeof(device_name_patterns)/sizeof(device_name_patterns[0]); i++) {
+        for (size_t i = 0; i < sizeof(device_name_patterns)/sizeof(device_name_patterns[0]); i++) {
             if (strcasestr(name, device_name_patterns[i])) {
                 doc["matched_name_pattern"] = device_name_patterns[i];
                 doc["name_match_confidence"] = "HIGH";
@@ -500,17 +601,17 @@ void output_ble_detection_json(const char* mac, const char* name, int rssi, cons
             }
         }
     }
-    
+
     // Detection summary
-    doc["detection_criteria"] = name_match && mac_match ? "NAME_AND_MAC" : 
+    doc["detection_criteria"] = name_match && mac_match ? "NAME_AND_MAC" :
                                (name_match ? "NAME_ONLY" : "MAC_ONLY");
-    doc["threat_score"] = name_match && mac_match ? 100 : 
+    doc["threat_score"] = name_match && mac_match ? 100 :
                          (name_match || mac_match ? 85 : 70);
-    
+
     // BLE advertisement type analysis
     doc["advertisement_type"] = "BLE_ADVERTISEMENT";
     doc["advertisement_description"] = "Bluetooth Low Energy device advertisement";
-    
+
     // Detection method details
     if (strcmp(detection_method, "mac_prefix") == 0) {
         doc["primary_indicator"] = "MAC_ADDRESS";
@@ -519,7 +620,20 @@ void output_ble_detection_json(const char* mac, const char* name, int rssi, cons
         doc["primary_indicator"] = "DEVICE_NAME";
         doc["detection_reason"] = "Device name matches Flock Safety pattern";
     }
-    
+
+    // Enriched tracking data
+    if (dev) {
+        doc["rssi_min"] = dev->rssi_min;
+        doc["rssi_max"] = dev->rssi_max;
+        doc["rssi_avg"] = dev->hit_count > 0 ? (int)(dev->rssi_sum / dev->hit_count) : rssi;
+        doc["hit_count"] = dev->hit_count;
+        if (dev->probe_intervals > 0) {
+            doc["avg_probe_interval_ms"] = dev->probe_interval_sum / dev->probe_intervals;
+        }
+        int8_t range = dev->rssi_max - dev->rssi_min;
+        doc["signal_trend"] = range < 10 ? "stable" : (range < 20 ? "moderate" : "moving");
+    }
+
     String json_output;
     serializeJson(doc, json_output);
     Serial.println(json_output);
@@ -529,31 +643,93 @@ void output_ble_detection_json(const char* mac, const char* name, int rssi, cons
 // DETECTION HELPER FUNCTIONS
 // ============================================================================
 
-bool is_already_detected(const uint8_t* mac)
-{
-    for (uint32_t i = 0; i < detected_device_count; i++) {
-        if (detected_devices[i].active &&
-            memcmp(detected_devices[i].mac, mac, 6) == 0) {
-            return true;
-        }
+// Forward declaration
+static void update_tracked_device(TrackedDevice* dev, int8_t rssi, uint8_t channel, uint8_t type);
+
+// Find tracked device by MAC hash, returns pointer or nullptr
+static TrackedDevice* find_tracked(const uint8_t* mac) {
+    uint32_t hash = fnv1a_mac(mac);
+    uint32_t idx = hash & MAX_TRACKED_MASK;
+
+    for (int probe = 0; probe < HASH_MAX_PROBE; probe++) {
+        uint32_t slot = (idx + probe) & MAX_TRACKED_MASK;
+        if (tracked_devices[slot].mac_hash == 0) return nullptr;
+        if (tracked_devices[slot].mac_hash == hash) return &tracked_devices[slot];
     }
-    return false;
+    return nullptr;
 }
 
-void add_detected_device(const uint8_t* mac)
+// Check if device was already detected and still within TTL
+bool is_already_detected(const uint8_t* mac)
 {
-    // Don't add if already detected
-    if (is_already_detected(mac)) return;
+    TrackedDevice* dev = find_tracked(mac);
+    if (!dev) return false;
 
-    // Add to list if space available
-    if (detected_device_count < MAX_DETECTED_DEVICES) {
-        memcpy(detected_devices[detected_device_count].mac, mac, 6);
-        detected_devices[detected_device_count].active = true;
-        detected_device_count++;
-    } else {
-        // List full - could implement FIFO replacement here
-        printf("[WARN] Detected device list full (%u devices)\n", MAX_DETECTED_DEVICES);
+    // TTL check: if last seen > DETECTION_TTL ago, treat as expired
+    if (millis() - dev->last_seen > DETECTION_TTL) return false;
+
+    return true;
+}
+
+// Create a new tracked device entry
+void add_detected_device(const uint8_t* mac, int8_t rssi, uint8_t channel, uint8_t type)
+{
+    uint32_t hash = fnv1a_mac(mac);
+    uint32_t idx = hash & MAX_TRACKED_MASK;
+    uint32_t now = millis();
+
+    for (int probe = 0; probe < HASH_MAX_PROBE; probe++) {
+        uint32_t slot = (idx + probe) & MAX_TRACKED_MASK;
+        if (tracked_devices[slot].mac_hash == 0) {
+            // Empty slot — create new entry
+            TrackedDevice& dev = tracked_devices[slot];
+            dev.mac_hash = hash;
+            memcpy(dev.mac, mac, 6);
+            dev.rssi_min = rssi;
+            dev.rssi_max = rssi;
+            dev.rssi_last = rssi;
+            dev.rssi_sum = rssi;
+            dev.hit_count = 1;
+            dev.last_channel = channel;
+            dev.type = type;
+            dev.first_seen = now;
+            dev.last_seen = now;
+            dev.probe_interval_sum = 0;
+            dev.probe_intervals = 0;
+            hash_entries++;
+            if (probe > 0) hash_collisions++;
+            return;
+        }
+        if (tracked_devices[slot].mac_hash == hash) {
+            // Already exists — update it
+            update_tracked_device(&tracked_devices[slot], rssi, channel, type);
+            return;
+        }
     }
+    printf("[WARN] Tracked device table probe limit reached (%u entries)\n", hash_entries);
+}
+
+// Update existing tracked device with new detection data
+static void update_tracked_device(TrackedDevice* dev, int8_t rssi, uint8_t channel, uint8_t type) {
+    uint32_t now = millis();
+
+    // RSSI trending
+    dev->rssi_last = rssi;
+    if (rssi < dev->rssi_min) dev->rssi_min = rssi;
+    if (rssi > dev->rssi_max) dev->rssi_max = rssi;
+    dev->rssi_sum += rssi;
+
+    // Probe interval timing
+    uint32_t interval = now - dev->last_seen;
+    if (interval > 10 && interval < 30000) {
+        dev->probe_interval_sum += interval;
+        dev->probe_intervals++;
+    }
+
+    dev->hit_count++;
+    dev->last_seen = now;
+    dev->last_channel = channel;
+    dev->type = type;
 }
 
 bool check_mac_prefix(const uint8_t* mac)
@@ -620,38 +796,23 @@ void wifi_sniffer_packet_handler(void* buff, wifi_promiscuous_pkt_type_t type)
     const wifi_ieee80211_packet_t *ipkt = (wifi_ieee80211_packet_t *)ppkt->payload;
     const wifi_ieee80211_mac_hdr_t *hdr = &ipkt->hdr;
 
-    // Check for probe requests (subtype 0x04) and beacons (subtype 0x08)
+    // Track channel activity for adaptive dwell
+    uint8_t ch = ppkt->rx_ctrl.channel;
+    if (ch >= 1 && ch <= 13) channel_activity[ch]++;
+
+    // Check for probe requests (0x04), probe responses (0x05), and beacons (0x08)
     uint8_t frame_type = (hdr->frame_ctrl & 0xFF) >> 2;
 
-    // DEBUG: Print frame type every 100 frames
-    static uint32_t frame_debug_count = 0;
-    if (frame_debug_count++ % 100 == 0) {
-        printf("[FRAME] Type: 0x%02x, Total: %u, Ch: %d\n",
-               frame_type, total_frames_seen, ppkt->rx_ctrl.channel);
+    if (frame_type != 0x10 && frame_type != 0x14 && frame_type != 0x20) {
+        return;  // Not probe req (0x10), probe resp (0x14), or beacon (0x20)
     }
 
-    if (frame_type != 0x10 && frame_type != 0x20) { // Probe request (0x10) or beacon (0x20)
-        return;
-    }
-
-    // DEBUG: We got a beacon or probe!
-    static uint32_t beacon_count = 0;
-    if (beacon_count++ % 20 == 0) {
-        printf("[BEACON/PROBE] Got frame type 0x%02x, count: %u\n", frame_type, beacon_count);
-    }
-
-    // Extract SSID from probe request or beacon
+    // Extract SSID from management frame
     char ssid[33] = {0};
-
-    // ipkt->payload points to frame body, but there are fixed fields before IEs
     uint8_t *payload = (uint8_t *)ipkt->payload;
 
-    // Probe requests have SSID immediately, beacons have 12 bytes of fixed fields
-    if (frame_type == 0x10) {
-        // Probe request: SSID element starts immediately in frame body
-        payload += 0;
-    } else {
-        // Beacon (0x20): skip timestamp(8) + beacon_interval(2) + capability(2) = 12 bytes
+    if (frame_type == 0x14 || frame_type == 0x20) {
+        // Probe response & beacon: skip timestamp(8) + beacon_interval(2) + capability(2) = 12 bytes
         payload += 12;
     }
 
@@ -659,67 +820,22 @@ void wifi_sniffer_packet_handler(void* buff, wifi_promiscuous_pkt_type_t type)
     if (payload[0] == 0 && payload[1] > 0 && payload[1] <= 32) {
         memcpy(ssid, &payload[2], payload[1]);
         ssid[payload[1]] = '\0';
-    }
-
-    if (strlen(ssid) == 0) {
-        return;  // No SSID found
-    }
-
-    // DEBUG: Print all valid SSIDs we see
-    if (strlen(ssid) > 0) {
         total_ssids_seen++;
-
-        char mac_str[18];
-        snprintf(mac_str, sizeof(mac_str), "%02x:%02x:%02x:%02x:%02x:%02x",
-                 hdr->addr2[0], hdr->addr2[1], hdr->addr2[2],
-                 hdr->addr2[3], hdr->addr2[4], hdr->addr2[5]);
-        printf("[DEBUG] SSID: '%s' MAC: %s RSSI: %d Type: %s Ch: %d (Frames: %u SSIDs: %u)\n",
-               ssid, mac_str, ppkt->rx_ctrl.rssi,
-               (frame_type == 0x10) ? "PROBE" : "BEACON",
-               ppkt->rx_ctrl.channel, total_frames_seen, total_ssids_seen);
-
-#ifdef HAS_DISPLAY
-        // Update display with last seen SSID
-        display.showDebugSSID(String(ssid), ppkt->rx_ctrl.rssi, ppkt->rx_ctrl.channel);
-#endif
     }
 
-    // Check if SSID matches our patterns
-    if (strlen(ssid) > 0 && check_ssid_pattern(ssid)) {
-        // Only output if not already detected
-        if (!is_already_detected(hdr->addr2)) {
-            const char* detection_type = (frame_type == 0x10) ? "probe_request" : "beacon";
-            output_wifi_detection_json(ssid, hdr->addr2, ppkt->rx_ctrl.rssi, detection_type);
-            add_detected_device(hdr->addr2);
+    // Enqueue event for processing task — runs in WiFi task context (not ISR)
+    if (detectionQueue) {
+        DetectionEvent evt;
+        memcpy(evt.mac, hdr->addr2, 6);
+        strncpy(evt.ssid, ssid, 32);
+        evt.ssid[32] = '\0';
+        evt.rssi = ppkt->rx_ctrl.rssi;
+        evt.channel = ch;
+        evt.type = (frame_type == 0x10) ? 0 : ((frame_type == 0x14) ? 4 : 1);  // 0=probe_req, 1=beacon, 4=probe_resp
 
-            if (!triggered) {
-                triggered = true;
-                flock_detected_beep_sequence();
-                led_flash_trigger(ppkt->rx_ctrl.rssi);
-            }
+        if (xQueueSend(detectionQueue, &evt, 0) != pdTRUE) {
+            events_dropped++;
         }
-        // Always update detection time for heartbeat tracking
-        last_detection_time = millis();
-        return;
-    }
-
-    // Check MAC address
-    if (check_mac_prefix(hdr->addr2)) {
-        // Only output if not already detected
-        if (!is_already_detected(hdr->addr2)) {
-            const char* detection_type = (frame_type == 0x10) ? "probe_request_mac" : "beacon_mac";
-            output_wifi_detection_json(ssid[0] ? ssid : "hidden", hdr->addr2, ppkt->rx_ctrl.rssi, detection_type);
-            add_detected_device(hdr->addr2);
-
-            if (!triggered) {
-                triggered = true;
-                flock_detected_beep_sequence();
-                led_flash_trigger(ppkt->rx_ctrl.rssi);
-            }
-        }
-        // Always update detection time for heartbeat tracking
-        last_detection_time = millis();
-        return;
     }
 }
 
@@ -742,45 +858,32 @@ class AdvertisedDeviceCallbacks: public NimBLEAdvertisedDeviceCallbacks {
             name = advertisedDevice->getName();
         }
 
+        // Quick check: does this device match any pattern?
+        bool mac_match = check_mac_prefix(mac);
+        bool name_match = !name.empty() && check_device_name_pattern(name.c_str());
+
+        if (!mac_match && !name_match) {
 #ifdef HAS_DISPLAY
-        // Show all BLE devices on display
-        display.showDebugBLE(String(name.c_str()), String(addrStr.c_str()), rssi);
-#endif
-
-        // Check MAC prefix
-        if (check_mac_prefix(mac)) {
-            // Only output if not already detected
-            if (!is_already_detected(mac)) {
-                output_ble_detection_json(addrStr.c_str(), name.c_str(), rssi, "mac_prefix");
-                add_detected_device(mac);
-
-                if (!triggered) {
-                    triggered = true;
-                    flock_detected_beep_sequence();
-                    led_flash_trigger(rssi);
-                }
+            // Still show non-matching BLE devices on display for debug
+            if (xSemaphoreTake(displayMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+                display.showDebugBLE(String(name.c_str()), String(addrStr.c_str()), rssi);
+                xSemaphoreGive(displayMutex);
             }
-            // Always update detection time for heartbeat tracking
-            last_detection_time = millis();
+#endif
             return;
         }
 
-        // Check device name
-        if (!name.empty() && check_device_name_pattern(name.c_str())) {
-            // Only output if not already detected
-            if (!is_already_detected(mac)) {
-                output_ble_detection_json(addrStr.c_str(), name.c_str(), rssi, "device_name");
-                add_detected_device(mac);
+        // Enqueue matching BLE detection for processing
+        if (detectionQueue) {
+            DetectionEvent evt;
+            memcpy(evt.mac, mac, 6);
+            strncpy(evt.ssid, name.c_str(), 32);
+            evt.ssid[32] = '\0';
+            evt.rssi = rssi;
+            evt.channel = 0;  // No channel for BLE
+            evt.type = mac_match ? 2 : 3;  // 2=ble_mac, 3=ble_name
 
-                if (!triggered) {
-                    triggered = true;
-                    flock_detected_beep_sequence();
-                    led_flash_trigger(rssi);
-                }
-            }
-            // Always update detection time for heartbeat tracking
-            last_detection_time = millis();
-            return;
+            xQueueSend(detectionQueue, &evt, pdMS_TO_TICKS(10));
         }
     }
 };
@@ -792,17 +895,138 @@ class AdvertisedDeviceCallbacks: public NimBLEAdvertisedDeviceCallbacks {
 void hop_channel()
 {
     unsigned long now = millis();
-    if (now - last_channel_hop > CHANNEL_HOP_INTERVAL) {
+
+    // Sticky channel: don't hop if we recently detected on this channel
+    if (now < channel_sticky_until) return;
+
+    // Adaptive dwell: check activity on current channel
+    uint16_t activity = channel_activity[current_channel];
+    uint32_t dwell_time = CHANNEL_DWELL_BASE;
+    if (activity >= CHANNEL_HIGH_THRESHOLD) {
+        dwell_time = CHANNEL_DWELL_HIGH;
+    } else if (activity >= CHANNEL_ACTIVE_THRESHOLD) {
+        dwell_time = CHANNEL_DWELL_ACTIVE;
+    }
+
+    // Add detection bonus for channels with past detections
+    uint8_t ch = current_channel;
+    if (ch >= 1 && ch <= 13 && channel_detections[ch] > 0) {
+        dwell_time += CHANNEL_DETECTION_BONUS * channel_detections[ch];
+        if (dwell_time > CHANNEL_MAX_DWELL) dwell_time = CHANNEL_MAX_DWELL;
+    }
+
+    if (now - last_channel_hop > dwell_time) {
+        // Reset activity counter for channel we're leaving
+        channel_activity[current_channel] = 0;
+
         current_channel++;
         if (current_channel > MAX_CHANNEL) {
             current_channel = 1;
         }
         esp_wifi_set_channel(current_channel, WIFI_SECOND_CHAN_NONE);
         last_channel_hop = now;
-        printf("[WiFi] Hopped to channel %d\n", current_channel);
 #ifdef HAS_DISPLAY
-        display.updateChannelInfo(current_channel);
+        if (xSemaphoreTake(displayMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+            display.updateChannelInfo(current_channel);
+            xSemaphoreGive(displayMutex);
+        }
 #endif
+    }
+}
+
+// ============================================================================
+// PROCESSING TASK (Core 0) — dequeues detection events, does pattern matching
+// ============================================================================
+
+void processingTask(void* parameter) {
+    (void)parameter;
+    DetectionEvent evt;
+
+    while (true) {
+        // Yield to IDLE0 to feed watchdog — critical when queue stays full
+        vTaskDelay(1);
+
+        if (xQueueReceive(detectionQueue, &evt, pdMS_TO_TICKS(100)) == pdTRUE) {
+            events_processed++;
+
+            char mac_str[18];
+            snprintf(mac_str, sizeof(mac_str), "%02x:%02x:%02x:%02x:%02x:%02x",
+                     evt.mac[0], evt.mac[1], evt.mac[2],
+                     evt.mac[3], evt.mac[4], evt.mac[5]);
+
+            if (evt.type <= 1 || evt.type == 4) {
+                // WiFi event (0=probe_req, 1=beacon, 4=probe_resp)
+
+#ifdef HAS_DISPLAY
+                // Show debug SSID on display
+                if (strlen(evt.ssid) > 0) {
+                    if (xSemaphoreTake(displayMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+                        display.showDebugSSID(String(evt.ssid), evt.rssi, evt.channel);
+                        xSemaphoreGive(displayMutex);
+                    }
+                }
+#endif
+
+                bool ssid_match = strlen(evt.ssid) > 0 && check_ssid_pattern(evt.ssid);
+                bool mac_match = check_mac_prefix(evt.mac);
+
+                if (ssid_match || mac_match) {
+                    // Track channel detections for channel memory
+                    if (evt.channel >= 1 && evt.channel <= 13) {
+                        channel_detections[evt.channel]++;
+                        channel_sticky_until = millis() + CHANNEL_STICKY_DURATION;
+                    }
+
+                    if (!is_already_detected(evt.mac)) {
+                        const char* detection_type;
+                        const char* ssid_out = strlen(evt.ssid) > 0 ? evt.ssid : "hidden";
+
+                        if (ssid_match) {
+                            detection_type = (evt.type == 0) ? "probe_request" :
+                                             (evt.type == 4) ? "probe_response" : "beacon";
+                        } else {
+                            detection_type = (evt.type == 0) ? "probe_request_mac" :
+                                             (evt.type == 4) ? "probe_response_mac" : "beacon_mac";
+                        }
+
+                        add_detected_device(evt.mac, evt.rssi, evt.channel, evt.type);
+                        TrackedDevice* dev = find_tracked(evt.mac);
+                        output_wifi_detection_json(ssid_out, evt.mac, evt.rssi, detection_type, dev);
+
+                        if (!triggered) {
+                            triggered = true;
+                            flock_detected_beep_sequence();
+                            led_flash_trigger(evt.rssi);
+                        }
+                    } else {
+                        // Re-detection: update tracking data
+                        TrackedDevice* dev = find_tracked(evt.mac);
+                        if (dev) update_tracked_device(dev, evt.rssi, evt.channel, evt.type);
+                    }
+                    last_detection_time = millis();
+                }
+            } else {
+                // BLE event (mac_prefix or device_name)
+                const char* method = (evt.type == 2) ? "mac_prefix" : "device_name";
+
+                if (!is_already_detected(evt.mac)) {
+                    add_detected_device(evt.mac, evt.rssi, 0, evt.type);
+                    TrackedDevice* dev = find_tracked(evt.mac);
+                    output_ble_detection_json(mac_str, evt.ssid, evt.rssi, method, dev);
+
+                    if (!triggered) {
+                        triggered = true;
+                        pending_beep = true;
+                        led_flash_trigger(evt.rssi);
+                    }
+                } else {
+                    // Re-detection: update tracking data
+                    TrackedDevice* dev = find_tracked(evt.mac);
+                    if (dev) update_tracked_device(dev, evt.rssi, 0, evt.type);
+                }
+                last_detection_time = millis();
+            }
+        }
     }
 }
 
@@ -852,31 +1076,54 @@ void setup()
 #endif
 
     boot_beep_sequence();
-    
+
     printf("Starting Flock Squawk Enhanced Detection System...\n\n");
-    
+
+    // Create FreeRTOS queue and mutex before starting WiFi/BLE
+    detectionQueue = xQueueCreate(16, sizeof(DetectionEvent));
+    displayMutex = xSemaphoreCreateMutex();
+    if (!detectionQueue || !displayMutex) {
+        printf("[FATAL] Failed to create queue or mutex!\n");
+    }
+
+    // Start processing task on Core 0
+    xTaskCreatePinnedToCore(
+        processingTask,        // Task function
+        "detect",              // Name
+        4096,                  // Stack size
+        NULL,                  // Parameter
+        1,                     // Priority (above idle)
+        &processingTaskHandle, // Task handle
+        0                      // Core 0
+    );
+    printf("[INIT] Processing task started on Core 0\n");
+
+    // Remove IDLE0 from task watchdog — Core 0 is dedicated to detection processing
+    esp_task_wdt_delete(xTaskGetIdleTaskHandleForCPU(0));
+    printf("[INIT] IDLE0 removed from task watchdog\n");
+
     // Initialize WiFi in promiscuous mode
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
     delay(100);
-    
+
     esp_wifi_set_promiscuous(true);
     esp_wifi_set_promiscuous_rx_cb(&wifi_sniffer_packet_handler);
     esp_wifi_set_channel(current_channel, WIFI_SECOND_CHAN_NONE);
-    
+
     printf("WiFi promiscuous mode enabled on channel %d\n", current_channel);
     printf("Monitoring probe requests and beacons...\n");
-    
+
     // Initialize BLE
     printf("Initializing BLE scanner...\n");
     NimBLEDevice::init("");
     pBLEScan = NimBLEDevice::getScan();
     pBLEScan->setAdvertisedDeviceCallbacks(new AdvertisedDeviceCallbacks());
-    pBLEScan->setActiveScan(true);
+    pBLEScan->setActiveScan(false);  // Passive scan — lower power, still gets ads
     pBLEScan->setInterval(100);
     pBLEScan->setWindow(99);
-    
-    printf("BLE scanner initialized\n");
+
+    printf("BLE scanner initialized (passive mode)\n");
     printf("System ready - hunting for Flock Safety devices...\n\n");
 
 #ifdef HAS_DISPLAY
@@ -898,32 +1145,44 @@ void loop()
     // Service the RGB LED strobe (non-blocking)
     led_flash_update();
 
-    // Print stats every 5 seconds
+    // Play detection beep on Core 1 (deferred from processingTask on Core 0)
+    if (pending_beep) {
+        pending_beep = false;
+        flock_detected_beep_sequence();
+    }
+
+    // Print stats every 5 seconds (includes queue diagnostics)
     static unsigned long last_stats = 0;
     if (millis() - last_stats > 5000) {
-        printf("[STATS] Frames: %u, SSIDs: %u, Channel: %d\n",
-               total_frames_seen, total_ssids_seen, current_channel);
+        UBaseType_t queueDepth = detectionQueue ? uxQueueMessagesWaiting(detectionQueue) : 0;
+        printf("[STATS] Frames: %u, SSIDs: %u, Ch: %d | Queue: %u/16, Processed: %u, Dropped: %u | Tracked: %u/%d, Collisions: %u\n",
+               total_frames_seen, total_ssids_seen, current_channel,
+               (unsigned)queueDepth, events_processed, events_dropped,
+               hash_entries, MAX_TRACKED, hash_collisions);
         last_stats = millis();
     }
 
 #ifdef HAS_DISPLAY
-    // Update display
-    display.update();
+    // Update display (mutex protects against concurrent addDetection from processing task)
+    if (xSemaphoreTake(displayMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        display.update();
+        xSemaphoreGive(displayMutex);
+    }
 #endif
 
     // Handle channel hopping for WiFi promiscuous mode
     hop_channel();
-    
+
     // Handle heartbeat pulse if device is in range
     if (device_in_range) {
         unsigned long now = millis();
-        
+
         // Check if 10 seconds have passed since last heartbeat
         if (now - last_heartbeat >= 10000) {
             heartbeat_pulse();
             last_heartbeat = now;
         }
-        
+
         // Check if device has gone out of range (no detection for 30 seconds)
         if (now - last_detection_time >= 30000) {
             printf("Device out of range - stopping heartbeat\n");
@@ -931,16 +1190,27 @@ void loop()
             triggered = false; // Allow new detections
         }
     }
-    
+
     if (millis() - last_ble_scan >= BLE_SCAN_INTERVAL && !pBLEScan->isScanning()) {
-        printf("[BLE] scan...\n");
         pBLEScan->start(BLE_SCAN_DURATION, false);
         last_ble_scan = millis();
+#ifdef HAS_DISPLAY
+        if (xSemaphoreTake(displayMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+            display.updateScanMode(true);
+            xSemaphoreGive(displayMutex);
+        }
+#endif
     }
-    
+
     if (pBLEScan->isScanning() == false && millis() - last_ble_scan > BLE_SCAN_DURATION * 1000) {
         pBLEScan->clearResults();
+#ifdef HAS_DISPLAY
+        if (xSemaphoreTake(displayMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+            display.updateScanMode(false);
+            xSemaphoreGive(displayMutex);
+        }
+#endif
     }
-    
-    delay(100);
+
+    vTaskDelay(pdMS_TO_TICKS(10));  // 10ms yield instead of 100ms delay
 }

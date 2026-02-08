@@ -66,6 +66,40 @@
 #define INFO_COLOR    ACCENT_COLOR
 #define WARNING_COLOR ALERT_WARN
 
+// TrackedDevice struct shared with main.cpp
+struct TrackedDevice {
+    uint32_t mac_hash;           // FNV-1a hash (0 = empty slot)
+    uint8_t  mac[6];             // Full MAC for display/logging
+    int8_t   rssi_min;           // Weakest signal seen
+    int8_t   rssi_max;           // Strongest signal seen
+    int8_t   rssi_last;          // Most recent RSSI
+    int32_t  rssi_sum;           // Running sum for average
+    uint16_t hit_count;          // Total detections
+    uint8_t  last_channel;       // Channel last seen on
+    uint8_t  type;               // Last detection type
+    uint32_t first_seen;         // millis() of first detection
+    uint32_t last_seen;          // millis() of most recent detection
+    uint32_t probe_interval_sum; // Sum of inter-detection intervals (ms)
+    uint16_t probe_intervals;    // Count of intervals measured
+};
+
+// Buffered log entry for async SD writing
+struct LogEntry {
+    uint32_t timestamp;
+    char ssid[33];
+    char mac[18];
+    char vendor[24];
+    int8_t rssi;
+    char type[20];
+    // Enriched fields from TrackedDevice
+    int8_t rssi_min;
+    int8_t rssi_max;
+    int8_t rssi_avg;
+    uint16_t hit_count;
+    uint16_t avg_probe_interval;
+    uint8_t channel;
+};
+
 // Display zones (adjusted for 320x240 with new layout)
 #define HEADER_HEIGHT     55           // Logo header area
 #define STATUS_BAR_HEIGHT 20           // Page status bar
@@ -131,6 +165,15 @@ private:
     uint32_t lastSdCheck;
     void checkSDCard();
     uint32_t detectionsLogged;
+
+    // Buffered logging
+    static const int MAX_PENDING_LOGS = 16;
+    LogEntry pendingLogs[MAX_PENDING_LOGS];
+    uint8_t pendingLogCount;
+    uint32_t lastFlushTime;
+    uint32_t sessionId;
+    void queueLog(const LogEntry& entry);
+    void flushLogs();
 
     // Brightness control (PWM)
     bool autoBrightness;
@@ -215,13 +258,12 @@ public:
 
     // SD Card
     bool initSDCard();
-    void logDetection(const String& ssid, const String& mac, int8_t rssi, const String& type);
     bool isSDCardPresent() { return sdCardPresent; }
     uint32_t getDetectionsLogged() { return detectionsLogged; }
     bool saveCalibration();
 
     // Data management
-    void addDetection(String ssid, String mac, int8_t rssi, String type);
+    void addDetection(String ssid, String mac, int8_t rssi, String type, TrackedDevice* dev = nullptr);
     void clearDetections();
     uint32_t getDetectionCount() { return totalDetections; }
     uint32_t getFlockCount() { return flockDetections; }
