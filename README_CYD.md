@@ -1,24 +1,24 @@
-# Flock You - ESP32-2432S028R (2.8" CYD) Edition
+# Flock You - Multi-Board Edition
 
-> **This fork is ONLY for the ESP32-2432S028R board (2.8" display, ILI9341, 320x240)**
->
-> Do NOT use this with ESP32-2432S035 (3.5"), ESP32-3248S035, or other CYD variants.
-> Those boards have different display controllers, resolutions, and pin mappings.
+Detects Flock Safety surveillance cameras and similar devices using WiFi and BLE scanning. Supports two ESP32 boards with full display UIs, RGB LED alerts, SD card logging, and OUI vendor lookup.
 
-This is a purpose-built fork for the **ESP32-2432S028R** "Cheap Yellow Display" - the 2.8" version with an ILI9341 display controller. It provides a complete touchscreen interface with RGB LED alerts, SD card logging, and touch calibration persistence.
+## Supported Boards
 
-## Supported Board
-
-**ESP32-2432S028R** - Look for these identifiers:
+### ESP32-2432S028R (2.8" CYD)
 - "2432S028" in the board name (NOT 2432S035 or 3248S035)
-- 2.8" display (NOT 3.5" or 4.3")
-- 320x240 resolution
-- ILI9341 display controller
-- Yellow PCB with USB connector on the short edge. Sold by DIYMall, board may have a GUiTiON logo.
+- 2.8" ILI9341 display, 320x240, resistive touchscreen
+- Yellow PCB with USB connector on the short edge
+- Sold by DIYMall, board may have a GUiTiON logo
+
+### Waveshare ESP32-S3-LCD-1.47
+- 1.47" ST7789 display, 172x320 (used in landscape: 320x172)
+- BOOT button navigation (no touchscreen)
+- WS2812B addressable RGB LED on GPIO 38
+- SDMMC card slot, USB-C
 
 ## Hardware Specifications
 
-### ESP32-2432S028R Board
+### ESP32-2432S028R (CYD)
 | Component | Specification |
 |-----------|---------------|
 | **MCU** | ESP32-WROOM-32 |
@@ -63,31 +63,73 @@ The XPT2046 touch controller is on a **separate HSPI bus** - this is critical an
 **Available for Extensions:**
 - GPIO 22: Buzzer output (active HIGH)
 
+### Waveshare ESP32-S3-LCD-1.47
+| Component | Specification |
+|-----------|---------------|
+| **MCU** | ESP32-S3 (QFN56) |
+| **Display** | 1.47" ST7789 TFT LCD, 172x320 pixels |
+| **Input** | BOOT button (GPIO 0) |
+| **RGB LED** | WS2812B addressable on GPIO 38 |
+| **SD Card** | SDMMC 1-bit (CLK=14, CMD=15, D0=16) |
+| **Flash** | 8MB QD |
+| **USB** | USB-C (USB-Serial/JTAG) |
+
+### Key Waveshare Hardware Notes
+
+**Display SPI Bus:**
+- MOSI: GPIO 45
+- SCLK: GPIO 40
+- CS: GPIO 42
+- DC: GPIO 41
+- RST: GPIO 39
+- Backlight: GPIO 48 (PWM via LEDC channel 0)
+
+**Navigation:**
+- BOOT button (GPIO 0) is the only input
+- Short press: cycle pages or adjust values
+- Long press: select setting for editing or exit to HOME
+
+**SD Card (SDMMC):**
+- Requires explicit `SD_MMC.setPins(14, 15, 16)` before `begin()` (ESP32-S3 has no default SDMMC pins)
+- 1-bit SDMMC mode
+
 ## Features
 
-### Touchscreen Interface
-- **4-button navigation**: HOME, LIST, STATS, CONFIG
+### Display Interface
+
+**CYD (Touchscreen):**
+- **4-button touchscreen navigation**: HOME, LIST, STATS, CONFIG
 - **Main dashboard**: Real-time detection stats, channel/BLE indicator, latest detection panel
 - **Detection list**: Scrollable list with color-coded threat indicators and signal strength
 - **Statistics page**: Detection counts, percentages, distribution bars, CLEAR button
 - **Config page**: Display/Sound/LED brightness controls with +/-/MAX buttons, SD card status, CALIBRATE button
 - **Calibration page**: Full-screen 4-point guided touch calibration with validation
 
-### Speaker/Sound Support
+**Waveshare (BOOT Button):**
+- **Single-button navigation**: BOOT button cycles HOME → LIST → STATS → CONFIG
+- **HOME page**: Stats panel (WiFi/BLE/Threat counts), latest detection with 2-second flash animation on new detections
+- **LIST page**: Auto-scrolling detection list with hit counts, time since last seen, vendor names, signal bars
+- **STATS page**: Two-column layout — summary stats (unique MACs vs total, detection rate, top channel) and persistent threat list with per-device RSSI and time ago
+- **CONFIG page**: Display/LED brightness controls, SD card file status (log size, settings, OUI database), short press cycles options, long press edits or exits to HOME
+
+### Speaker/Sound Support (CYD only)
 - Boot tone on startup (3-note ascending sequence)
 - Sound toggle and volume control (0-100%)
 - Speaker connected to GPIO 26 (SPEAK P4 connector)
 
-### RGB LED Alert System
+### RGB LED Alert System (both boards)
 The RGB LED provides visual status at a glance:
 
 | State | Color | Behavior |
 |-------|-------|----------|
-| Scanning | Green (50%) | Solid - system is actively scanning |
+| Scanning | Green | Solid - system is actively scanning |
 | Detection | Red | Flashing - speed based on signal strength |
-| Alert | Orange | Solid - recent detection, signal lost |
+| Alert | Orange | Solid - signal lost after detection |
 
 Flash rate scales with RSSI: stronger signals flash faster (50ms interval) while weak signals flash slower (400ms interval).
+
+**CYD**: Alert returns to scanning after 15 seconds.
+**Waveshare**: Alert is persistent until reboot. New detections while orange return to red flashing.
 
 ### Touch Calibration System
 First boot triggers a guided 4-point calibration:
@@ -102,7 +144,7 @@ Manual recalibration available via CALIBRATE button on CONFIG page.
 
 ### SD Card Setup
 
-**Format:** FAT32 (required)
+**Format:** FAT32 (required for both boards)
 
 **Files to copy from this repo:**
 | File | Purpose | Required? |
@@ -110,17 +152,18 @@ Manual recalibration available via CALIBRATE button on CONFIG page.
 | `oui.csv` | MAC vendor lookup database (37K entries) | Optional but recommended |
 
 **Files created automatically:**
-| File | Purpose |
-|------|---------|
-| `touch_cal.txt` | Touch calibration data (4 values) |
-| `settings.txt` | Persistent settings (brightness, sound, LED) |
-| `flockyou_detections.csv` | Detection log with timestamp, SSID, MAC, vendor, RSSI, type |
+| File | Board | Purpose |
+|------|-------|---------|
+| `touch_cal.txt` | CYD | Touch calibration data (4 values) |
+| `settings.txt` | Both | Persistent settings (brightness, LED) |
+| `flockyou_detections.csv` | Both | Detection log with timestamp, SSID, MAC, vendor, RSSI, type |
 
 **Quick setup:**
 1. Format SD card as FAT32
 2. Copy `oui.csv` from repo root to SD card root
-3. Insert SD card into CYD board
-4. First boot will prompt for touch calibration (saved to SD)
+3. Insert SD card into board
+4. CYD: first boot will prompt for touch calibration (saved to SD)
+5. Waveshare: settings and detections log automatically
 
 ### OUI Vendor Lookup
 The system identifies device manufacturers from MAC addresses:
@@ -154,17 +197,16 @@ The system identifies device manufacturers from MAC addresses:
 git clone https://github.com/JarvisLatteier/Flock-You-CYD-2432S028R.git
 cd Flock-You-CYD-2432S028R
 
-# Build firmware
-pio run -e esp32_cyd_28
+# --- ESP32-2432S028R (CYD) ---
+pio run -e esp32_cyd_28 -t upload       # Build and flash
+pio device monitor -e esp32_cyd_28      # Serial monitor (115200 baud)
 
-# Flash to device
-pio run -e esp32_cyd_28 -t upload
-
-# Monitor serial output (115200 baud)
-pio device monitor -e esp32_cyd_28
+# --- Waveshare ESP32-S3-LCD-1.47 ---
+pio run -e waveshare_s3_147 -t upload   # Build and flash
+pio device monitor -e waveshare_s3_147  # Serial monitor (115200 baud)
 ```
 
-### Alternative: Headless Build
+### Alternative: Headless Build (CYD only)
 If you don't need the display interface (e.g., using the web dashboard only):
 
 ```bash
@@ -175,10 +217,15 @@ This excludes all display code but retains RGB LED alerts and serial JSON output
 
 ## Build Environments
 
-| Environment | Description |
-|-------------|-------------|
-| `esp32_cyd_28` | Full build with touchscreen UI |
-| `esp32_cyd_28_headless` | No display, RGB LED + serial only |
+| Environment | Board | Description |
+|-------------|-------|-------------|
+| `esp32_cyd_28` | CYD | Full build with touchscreen UI |
+| `esp32_cyd_28_headless` | CYD | No display, RGB LED + serial only |
+| `waveshare_s3_147` | Waveshare | Full build with BOOT button UI |
+
+**macOS Notes:**
+- CYD upload speed must be 115200 baud (higher speeds fail on Apple Silicon)
+- Waveshare uses USB-CDC at 921600 baud, auto-detected
 
 ## Usage
 
@@ -304,12 +351,13 @@ This fork differs from the main Flock-You project:
 
 | Feature | Upstream | This Fork |
 |---------|----------|-----------|
-| Target board | Xiao ESP32 S3 / 3.5" CYD | ESP32-2432S028R (2.8") |
-| Display | ILI9488 480x320 | ILI9341 320x240 |
-| Touch bus | Shared VSPI | Separate HSPI |
-| Touch calibration | Hardcoded | 4-point with SD persistence |
-| RGB LED | N/A | Full PWM control with state machine |
-| Backlight | Single pin | Dual pin PWM |
+| Target boards | Xiao ESP32 S3 / 3.5" CYD | ESP32-2432S028R (2.8") + Waveshare ESP32-S3-LCD-1.47 |
+| Displays | ILI9488 480x320 | ILI9341 320x240 (CYD), ST7789 172x320 (Waveshare) |
+| Touch | Shared VSPI | Separate HSPI (CYD), BOOT button (Waveshare) |
+| Touch calibration | Hardcoded | 4-point with SD persistence (CYD) |
+| RGB LED | N/A | PWM state machine (CYD), WS2812B (Waveshare) |
+| Threat tracking | Basic | Persistent threat list, hit counts, closest RSSI |
+| SD card | Basic | Detection logging, settings persistence, OUI lookup |
 
 ## Legal Disclaimer
 
